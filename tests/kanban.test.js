@@ -61,6 +61,27 @@ function seedProject(id, extra = {}) {
 
 beforeEach(() => { _diskProjects = []; });
 
+describe('mandatory UI browser verification', () => {
+  it('rejects shell-only and stale journeys, persists current evidence and invalidates it after edits', () => {
+    seedProject('ui', { qa: { command: 'npm test' } });
+    const item = addBacklogItem('ui', { title: 'Fix sidebar UI', column: 'in_progress' });
+    moveWorkItem('ui', item.id, { column: 'in_progress', runEntry: { taskId: 'run-ui' } }, { actor: 'human' });
+    pm.setWorkItemVerification('ui', item.id, { ok: true, runId: 'run-ui' });
+    expect(moveWorkItem('ui', item.id, { column: 'done' }, { actor: 'ai' }).ok).toBe(false);
+    const browser = { ok: true, kind: 'browser-journey', source: 'internal',
+      url: 'http://localhost:3000', navigated: true, consoleChecked: true, consoleErrors: [],
+      steps: [{ action: 'click', ok: true }],
+      checks: [{ selector: '#outcome', property: 'text', actual: 'After', expected: 'After', ok: true }] };
+    pm.setWorkItemBrowserVerification('ui', item.id, { ...browser, runId: 'old-run' });
+    expect(moveWorkItem('ui', item.id, { column: 'done' }, { actor: 'ai' }).ok).toBe(false);
+    pm.setWorkItemBrowserVerification('ui', item.id, { ...browser, runId: 'run-ui' });
+    expect(moveWorkItem('ui', item.id, { column: 'done' }, { actor: 'ai' }).ok).toBe(true);
+    moveWorkItem('ui', item.id, { column: 'in_progress' }, { actor: 'human' });
+    pm.setWorkItemBrowserVerification('ui', item.id, null);
+    expect(moveWorkItem('ui', item.id, { column: 'done' }, { actor: 'ai' }).ok).toBe(false);
+  });
+});
+
 describe('addBacklogItem (P1 extended shape)', () => {
   it('defaults a new item to backlog column with priority p2', () => {
     seedProject('proj-1');
@@ -351,6 +372,21 @@ describe('updateBacklogItem (extended fields)', () => {
 
 // ── P7: verification gate on moveWorkItem ────────────────────────────────
 describe('moveWorkItem verification gate (P7)', () => {
+  it('blocks AI completion when only automatically detected tests exist', () => {
+    seedProject('proj-1', { rootPath: process.cwd() });
+    const item = addBacklogItem('proj-1', { title: 'Fix', column: 'in_progress' });
+    expect(moveWorkItem('proj-1', item.id, { column: 'done' }, { actor: 'ai' })).toMatchObject({
+      ok: false, error: expect.stringContaining('passing verification'),
+    });
+  });
+
+  it('blocks an AI-claimed card without a configured verifier from skipping review', () => {
+    seedProject('proj-1');
+    const item = addBacklogItem('proj-1', { title: 'Fix', column: 'in_progress' });
+    moveWorkItem('proj-1', item.id, { claimedBy: 'ai:orchestrator' }, { actor: 'ai' });
+    expect(moveWorkItem('proj-1', item.id, { column: 'done' }, { actor: 'ai' }).ok).toBe(false);
+    expect(moveWorkItem('proj-1', item.id, { column: 'done' }, { actor: 'human' }).ok).toBe(true);
+  });
   const { setWorkItemVerification } = pm;
 
   it('defaults new items to verifyCommand=null and verified=null', () => {

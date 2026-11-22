@@ -2225,7 +2225,7 @@ export const SELF_TOOL_DEFS = [
         properties: {
           action: {
             type: 'string',
-            description: 'One of: navigate, back, forward, reload, click, type, extract, evaluate, screenshot, scroll, wait, new-tab, switch-tab, close-tab, list-tabs. Compatibility aliases accepted: eval, tab-new, tab-switch, tab-close, tab-list.',
+            description: 'One of: navigate, back, forward, reload, click, type, extract, evaluate, screenshot, scroll, wait, new-tab, switch-tab, close-tab, list-tabs, console-logs, verify. verify executes a relevant UI journey in the in-app browser and checks DOM outcomes and console errors. Compatibility aliases accepted: eval, tab-new, tab-switch, tab-close, tab-list.',
           },
           url: { type: 'string', description: 'URL for navigate / new-tab.' },
           selector: { type: 'string', description: 'CSS selector for click / type / extract / scroll.' },
@@ -2233,6 +2233,21 @@ export const SELF_TOOL_DEFS = [
           js: { type: 'string', description: 'JavaScript to run for the evaluate action.' },
           tabId: { type: 'string', description: 'Tab id for switch-tab / close-tab.' },
           waitMs: { type: 'number', description: 'Milliseconds to wait for the wait action.' },
+          steps: {
+            type: 'array',
+            description: 'For verify: ordered ad-hoc journey (max 20), including click/type and an assert AFTER an interaction. Each assert uses a CSS selector and one expected DOM property (count, text, value, visible). No arbitrary JS or screenshots as assertions.',
+            items: {
+              type: 'object',
+              properties: {
+                action: { type: 'string', enum: ['click', 'type', 'assert'] },
+                selector: { type: 'string' },
+                text: { type: 'string' },
+                property: { type: 'string', enum: ['count', 'text', 'value', 'visible'] },
+                expected: { description: 'Exact expected value: string for text/value, number for count, boolean for visible.' },
+              },
+              required: ['action', 'selector'],
+            },
+          },
           forceInternal: { type: 'boolean', description: 'Use the in-app webview even when this turn is anchored to a shared browser-extension tab. Native fauna_browser calls are internal by default; this is an explicit routing override for compatibility.' },
         },
         required: ['action'],

@@ -87,6 +87,13 @@ contextBridge.exposeInMainWorld('faunaApp', {
     return () => ipcRenderer.removeListener('fauna:open-file-error', handler);
   },
 
+  onBrowserTool(callback) {
+    if (typeof callback !== 'function') return () => {};
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('fauna:browser-tool', handler);
+    return () => ipcRenderer.removeListener('fauna:browser-tool', handler);
+  },
+
   /**
    * Speak `text` through the server-side Tts engine (Kokoro by default).
    * Resolves when playback finishes (or `{cancelled:true}` on stop). The

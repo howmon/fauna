@@ -2,7 +2,9 @@
 // Manages projects stored in ~/.config/fauna/projects.json
 // Each project can have local/remote sources, saved contexts, and connectors.
 
-import fs   from 'fs';
+import fs from 'fs';
+import { detectAutoVerifyCommand } from './lib/verification-command.js';
+import { isUiChange, passedBrowserVerification } from './lib/browser-verification.js';
 import path from 'path';
 import os   from 'os';
 import { execSync, spawn as _spawn } from 'child_process';
@@ -1601,8 +1603,15 @@ export function moveWorkItem(projectId, itemId, patch = {}, opts = {}) {
     // Humans are trusted (they can mark anything done manually). The gate
     // applies regardless of strict mode — verification is non-negotiable.
     if (actor === 'ai' && targetCol === 'done') {
+      if (it.browserVerificationRequired || isUiChange((it.title || '') + '\n' + (it.description || '') + '\n' + (it.body || ''))) {
+        const browser = it.browserVerification;
+        const lastRun = it.runs.length ? it.runs[it.runs.length - 1] : null;
+        if (!passedBrowserVerification(browser) || !browser.runId || browser.runId !== lastRun?.taskId) {
+          return { ok: false, error: 'UI completion requires a passing in-app browser journey from this run' };
+        }
+      }
       const projectQa = (p.qa && p.qa.command && p.qa.command.trim()) || null;
-      const hasVerifier = !!(it.verifyCommand || projectQa);
+      const hasVerifier = !!(it.verifyCommand || projectQa || detectAutoVerifyCommand(p.rootPath) || it.claimedBy?.startsWith('ai:'));
       if (hasVerifier) {
         const v = it.verified;
         if (!v || v.ok !== true) {
@@ -1741,6 +1750,20 @@ export function setWorkItemVerification(projectId, itemId, verification) {
       source:    verification.source === 'judge' ? 'judge' : 'shell',
     });
   }
+
+  it.updatedAt = now();
+  p.updatedAt = now();
+  writeProjects(projects);
+  return it;
+}
+
+export function setWorkItemBrowserVerification(projectId, itemId, verification) {
+  const projects = readProjects();
+  const p = projects.find(x => x.id === projectId);
+  const it = p?.backlog?.find(x => x.id === itemId);
+  if (!it) return null;
+  it.browserVerificationRequired = true;
+  it.browserVerification = verification || null;
   it.updatedAt = now();
   p.updatedAt = now();
   writeProjects(projects);

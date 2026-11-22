@@ -17,7 +17,7 @@ vi.mock('../server/llm/registry.js', () => ({
 }));
 
 function makeTmpDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'fauna-chat-hooks-'));
+  return fs.mkdtempSync(path.join(process.cwd(), '.fauna-chat-hooks-'));
 }
 
 function write(filePath, body) {
@@ -33,7 +33,7 @@ function makeFakeApp() {
     async invoke(method, pathName, req = {}) {
       const handlers = routes.get(method.toUpperCase() + ' ' + pathName);
       if (!handlers) throw new Error('No route ' + method + ' ' + pathName);
-      const res = makeFakeSseRes();
+      const res = makeFakeSseRes(req.onEvent);
       const list = Array.isArray(handlers) ? handlers : [handlers];
       let index = 0;
       const next = async () => {
@@ -46,7 +46,7 @@ function makeFakeApp() {
   };
 }
 
-function makeFakeSseRes() {
+function makeFakeSseRes(onEvent) {
   const emitter = new EventEmitter();
   return {
     statusCode: 200,
@@ -56,7 +56,13 @@ function makeFakeSseRes() {
     on: emitter.on.bind(emitter),
     off: emitter.off.bind(emitter),
     writeHead(code, headers) { this.statusCode = code; this.headers = headers; return this; },
-    write(chunk) { this.chunks.push(String(chunk)); return true; },
+    write(chunk) {
+      this.chunks.push(String(chunk));
+      if (onEvent) for (const event of parseSse([String(chunk)])) onEvent(event);
+      return true;
+    },
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; },
     end() { this.writableEnded = true; emitter.emit('finish'); },
   };
 }
@@ -127,6 +133,107 @@ describe('POST /api/chat lifecycle hooks', () => {
 
   afterEach(() => {
     fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  });
+
+  const browserEvidence = {
+    ok: true, kind: 'browser-journey', source: 'internal', url: 'http://localhost:3000',
+    navigated: true, consoleChecked: true, consoleErrors: [],
+    steps: [{ action: 'click', selector: '#submit', ok: true }, { action: 'assert', ok: true }],
+    checks: [{ selector: '#outcome', property: 'text', actual: 'After', expected: 'After', ok: true }],
+  };
+  const browserArgs = {
+    action: 'verify', url: 'http://localhost:3000',
+    steps: [{ action: 'click', selector: '#submit' },
+      { action: 'assert', selector: '#outcome', property: 'text', expected: 'After' }],
+  };
+
+  it.each([false, true])('blocks UI completion without executed journeys, noTools=%s', async noTools => {
+    llm.supportsTools = !noTools;
+    llm.create.mockImplementation(async () => mockStopStream('DONE: fixed UI'));
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'Fix sidebar UI' }], noTools,
+        autonomousMode: true, clientContext: 'test' },
+    });
+    const events = parseSse(res.chunks);
+    expect(events.find(event => event.type === 'task_result')).toMatchObject({ status: 'BLOCKED' });
+    expect(events.find(event => event.type === 'done')).toMatchObject({ finish_reason: 'browser_verification_failed' });
+  });
+
+  it('does not impose browser checks on documentation about UI', async () => {
+    mockTextStream('Use the sidebar to open settings.');
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'Create documentation for the sidebar UI' }],
+        noTools: true, clientContext: 'test' },
+    });
+    expect(parseSse(res.chunks).some(event => event.type === 'task_result')).toBe(false);
+    expect(parseSse(res.chunks).find(event => event.type === 'done').finish_reason).toBe('stop');
+  });
+
+  it('accepts native executed evidence but requires a fresh journey after a later code edit', async () => {
+    llm.supportsTools = true;
+    write(path.join(workspaceRoot, 'package.json'), JSON.stringify({ scripts: { test: 'node --check app.js' } }));
+    write(path.join(workspaceRoot, 'app.js'), 'const ok = true;\n');
+    llm.create
+      .mockResolvedValueOnce(mockToolCallStream('fauna_browser', browserArgs))
+      .mockResolvedValueOnce(mockToolCallStream('fauna_write_file', {
+        path: path.join(workspaceRoot, 'index.html'), content: '<button id="submit">Submit</button>',
+      }))
+      .mockResolvedValueOnce(mockStopStream('DONE: updated UI'))
+      .mockResolvedValueOnce(mockStopStream('DONE: tests passed'))
+      .mockResolvedValueOnce(mockToolCallStream('fauna_browser', browserArgs))
+      .mockResolvedValueOnce(mockStopStream('DONE: UI journey passed'))
+      .mockResolvedValueOnce(mockStopStream('No lessons.'));
+    let executions = 0;
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'Fix sidebar UI' }],
+        autonomousMode: true, taskCwd: workspaceRoot, clientContext: 'test' },
+      onEvent(event) {
+        if (event.type === 'client_tool_pending') {
+          executions++;
+          void app.invoke('POST', '/api/client-tool-result', {
+            body: { callId: event.callId, result: browserEvidence },
+          });
+        }
+      },
+    });
+    expect(executions).toBe(2);
+    expect(parseSse(res.chunks).find(event => event.type === 'task_result')).toMatchObject({
+      status: 'DONE', verification: { ok: true, browser: browserEvidence },
+    });
+    expect(llm.create.mock.calls.some(([call]) => call.messages?.some(
+      message => /UI changes REQUIRE live ad-hoc/.test(message.content || ''),
+    ))).toBe(true);
+  });
+
+  it('routes headless browser verification to the native renderer and fails immediately without one', async () => {
+    llm.supportsTools = true;
+    const sendNative = vi.fn((_channel, payload) => {
+      void app.invoke('POST', '/api/client-tool-result', {
+        body: { callId: payload.callId, result: browserEvidence },
+      });
+    });
+    registerChatRoute(app, { ...makeDeps(workspaceRoot),
+      getMainWindows: () => [{ webContents: { getURL: () => 'http://localhost:3737/', send: sendNative } }] });
+    write(path.join(workspaceRoot, 'app.js'), 'const valid = true;\n');
+    write(path.join(workspaceRoot, 'package.json'), JSON.stringify({ scripts: { check: 'node --check app.js' } }));
+    llm.create
+      .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', {
+        command: 'npm run check', cwd: workspaceRoot,
+      }))
+      .mockResolvedValueOnce(mockToolCallStream('fauna_browser', browserArgs))
+      .mockResolvedValueOnce(mockStopStream('DONE: browser verified'))
+      .mockResolvedValueOnce(mockStopStream('No lessons.'));
+    const body = { messages: [{ role: 'user', content: 'Fix sidebar UI' }],
+      headlessTask: true, autonomousMode: true, browserEnabled: true, clientContext: 'test' };
+    const res = await app.invoke('POST', '/api/chat', { body });
+    expect(sendNative).toHaveBeenCalledWith('fauna:browser-tool', expect.objectContaining({ args: browserArgs }));
+    expect(parseSse(res.chunks).find(event => event.type === 'task_result'), JSON.stringify(
+      llm.create.mock.calls.map(([call]) => call.messages?.filter(m => m.role === 'user').slice(-2)),
+    )).toMatchObject({ status: 'DONE' });
+    registerChatRoute(app, makeDeps(workspaceRoot));
+    llm.create.mockImplementation(async () => mockStopStream('DONE: fixed UI'));
+    const blocked = await app.invoke('POST', '/api/chat', { body });
+    expect(parseSse(blocked.chunks).find(event => event.type === 'task_result').status).toBe('BLOCKED');
   });
 
   it('rejects Project Search before model execution when project scope is missing', async () => {
@@ -492,6 +599,150 @@ describe('POST /api/chat lifecycle hooks', () => {
     expect(events.some(event => event.type === 'content' && event.content === 'Done after validation.')).toBe(true);
   });
 
+  describe('test-backed completion', () => {
+    function seedCompletionTests(initial = 'fixed') {
+      write(path.join(workspaceRoot, 'package.json'), JSON.stringify({
+        scripts: { test: 'node --test checks.test.cjs' },
+      }));
+      write(path.join(workspaceRoot, 'changed.js'), initial);
+      write(path.join(workspaceRoot, 'checks.test.cjs'), [
+        "const fs = require('node:fs');",
+        "const assert = require('node:assert/strict');",
+        "require('node:test')('changed behavior', () => {",
+        "  fs.appendFileSync('verification-runs.txt', process.env.CI + '\\n');",
+        "  assert.equal(fs.readFileSync('changed.js', 'utf8'), 'fixed');",
+        '});',
+      ].join('\n'));
+    }
+
+    it('actually runs detected tests before completing a normal coding turn', async () => {
+      llm.supportsTools = true;
+      seedCompletionTests();
+      llm.create
+        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: 'touch changed.js', cwd: workspaceRoot }))
+        .mockResolvedValueOnce(mockStopStream('Implemented the change.'))
+        .mockResolvedValueOnce(mockStopStream('Completed; npm run test passed.'));
+
+      const res = await app.invoke('POST', '/api/chat', {
+        body: { messages: [{ role: 'user', content: 'fix the code' }], clientContext: 'test' },
+      });
+
+      expect(fs.readFileSync(path.join(workspaceRoot, 'verification-runs.txt'), 'utf8')).toBe('1\n');
+      const result = parseSse(res.chunks).find(event => event.type === 'tool_result' && event.name === 'autonomous_qa_gate');
+      expect(JSON.parse(result.result)).toMatchObject({ ok: true, exitCode: 0 });
+      expect(llm.create.mock.calls.at(-1)[0].messages.some(message =>
+        message.role === 'user' && /Completion verification PASSED/.test(message.content)
+      )).toBe(true);
+    });
+
+    it('rechecks after failed QA is repaired instead of trusting a second DONE', async () => {
+      llm.supportsTools = true;
+      seedCompletionTests('broken');
+      llm.create
+        .mockResolvedValueOnce(mockStopStream('DONE: implemented'))
+        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: "printf fixed > changed.js", cwd: workspaceRoot }))
+        .mockResolvedValueOnce(mockStopStream('DONE: repaired'))
+        .mockResolvedValueOnce(mockStopStream('DONE: npm run test passed after repair'));
+
+      const res = await app.invoke('POST', '/api/chat', {
+        body: {
+          messages: [{ role: 'user', content: 'fix the code' }], clientContext: 'test',
+          autonomousMode: true, taskCwd: workspaceRoot, qa: { command: 'npm run test' },
+        },
+      });
+
+      const results = parseSse(res.chunks).filter(event => event.type === 'tool_result' && event.name === 'autonomous_qa_gate');
+      expect(results.map(event => JSON.parse(event.result).ok)).toEqual([false, true]);
+      expect(fs.readFileSync(path.join(workspaceRoot, 'verification-runs.txt'), 'utf8')).toBe('1\n1\n');
+      expect(parseSse(res.chunks).find(event => event.type === 'task_result')).toMatchObject({
+        status: 'DONE', content: 'DONE: npm run test passed after repair', verification: { ok: true },
+      });
+    });
+
+    it('invalidates a passing check when the agent edits again', async () => {
+      llm.supportsTools = true;
+      seedCompletionTests();
+      llm.create
+        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: 'touch changed.js', cwd: workspaceRoot }))
+        .mockResolvedValueOnce(mockStopStream('Implemented the change.'))
+        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: 'touch another.js', cwd: workspaceRoot }))
+        .mockResolvedValueOnce(mockStopStream('Implemented the follow-up.'))
+        .mockResolvedValueOnce(mockStopStream('Completed after tests passed again.'));
+
+      await app.invoke('POST', '/api/chat', {
+        body: { messages: [{ role: 'user', content: 'fix the code' }], clientContext: 'test' },
+      });
+
+      expect(fs.readFileSync(path.join(workspaceRoot, 'verification-runs.txt'), 'utf8')).toBe('1\n1\n');
+      expect(llm.create).toHaveBeenCalledTimes(5);
+    });
+
+    it('blocks repeated failing checks even when the agent keeps claiming DONE', async () => {
+      seedCompletionTests('broken');
+      llm.create.mockImplementation(async () => mockStopStream('DONE: implemented'));
+      const res = await app.invoke('POST', '/api/chat', {
+        body: {
+          messages: [{ role: 'user', content: 'fix the code' }], clientContext: 'test',
+          autonomousMode: true, taskCwd: workspaceRoot, qa: { command: 'npm run test' },
+        },
+      });
+
+      expect(llm.create).toHaveBeenCalledTimes(3);
+      expect(fs.readFileSync(path.join(workspaceRoot, 'verification-runs.txt'), 'utf8')).toBe('1\n1\n1\n');
+      expect(parseSse(res.chunks).find(event => event.type === 'task_result').status).toBe('BLOCKED');
+      expect(parseSse(res.chunks).at(-1)).toMatchObject({ type: 'done', finish_reason: 'verification_failed' });
+    });
+
+    it('does not run checks during a conversational turn or bypass disabled shell access', async () => {
+      seedCompletionTests();
+      llm.create.mockImplementation(async () => mockStopStream('Hello.'));
+      await app.invoke('POST', '/api/chat', {
+        body: { messages: [{ role: 'user', content: 'hello' }], clientContext: 'test' },
+      });
+      expect(fs.existsSync(path.join(workspaceRoot, 'verification-runs.txt'))).toBe(false);
+
+      llm.create.mockImplementation(async () => mockStopStream('DONE: implemented'));
+      const res = await app.invoke('POST', '/api/chat', {
+        body: {
+          messages: [{ role: 'user', content: 'fix the code' }], clientContext: 'test',
+          autonomousMode: true, taskCwd: workspaceRoot, shellEnabled: false,
+        },
+      });
+      expect(fs.existsSync(path.join(workspaceRoot, 'verification-runs.txt'))).toBe(false);
+      expect(parseSse(res.chunks).find(event => event.type === 'task_result')).toMatchObject({
+        status: 'BLOCKED', content: expect.stringContaining('Shell access is disabled'),
+      });
+    });
+
+    it('blocks completion when code changes have no successful validation', async () => {
+      llm.supportsTools = true;
+      write(path.join(workspaceRoot, 'changed.js'), 'const changed = true;\n');
+      llm.create
+        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: 'touch changed.js', cwd: workspaceRoot }))
+        .mockImplementation(async () => mockStopStream('Implemented the change.'));
+      const res = await app.invoke('POST', '/api/chat', {
+        body: { messages: [{ role: 'user', content: 'fix the code' }], clientContext: 'test' },
+      });
+      expect(llm.create).toHaveBeenCalledTimes(4);
+      expect(parseSse(res.chunks).find(event => event.type === 'task_result').status).toBe('BLOCKED');
+      expect(parseSse(res.chunks).at(-1)).toMatchObject({ type: 'done', finish_reason: 'verification_missing' });
+    });
+
+    it('does not auto-run project tests for a documentation-only file edit', async () => {
+      llm.supportsTools = true;
+      seedCompletionTests();
+      llm.create
+        .mockResolvedValueOnce(mockToolCallStream('fauna_write_file', { path: path.join(workspaceRoot, 'README.md'), content: '# Docs\n' }))
+        .mockResolvedValueOnce(mockStopStream('Documentation saved.'));
+      await app.invoke('POST', '/api/chat', {
+        body: { messages: [{ role: 'user', content: 'save this documentation' }], clientContext: 'test' },
+      });
+      expect(fs.readFileSync(path.join(workspaceRoot, 'README.md'), 'utf8')).toBe('# Docs\n');
+      expect(fs.existsSync(path.join(workspaceRoot, 'verification-runs.txt'))).toBe(false);
+    });
+
+  });
+
   it('does not count a failed mutation command as an actual fix', async () => {
     llm.supportsTools = true;
     llm.create
@@ -557,7 +808,7 @@ describe('POST /api/chat lifecycle hooks', () => {
     expect(llm.create).toHaveBeenCalledTimes(5);
     const finalCallMessages = llm.create.mock.calls[4][0].messages;
     expect(finalCallMessages.some(message =>
-      message.role === 'user' && /visible browser\/UI outcome/.test(message.content)
+      message.role === 'user' && /UI changes REQUIRE live ad-hoc/.test(message.content)
     )).toBe(true);
     expect(parseSse(res.chunks).some(event =>
       event.type === 'content' && /BLOCKED: browser runtime verification/.test(event.content)
@@ -596,11 +847,11 @@ describe('POST /api/chat lifecycle hooks', () => {
       event.type === 'tool_activity_result' && event.name === 'browser_snapshot' && event.status === 'failed'
     )).toBe(true);
     expect(llm.create.mock.calls[5][0].messages.some(message =>
-      message.role === 'user' && /visible browser\/UI outcome/.test(message.content)
+      message.role === 'user' && /UI changes REQUIRE live ad-hoc/.test(message.content)
     )).toBe(true);
   });
 
-  it('accepts a visible UI claim after successful post-edit browser evidence', async () => {
+  it('rejects a visible UI claim backed only by a successful external snapshot', async () => {
     llm.supportsTools = true;
     write(path.join(workspaceRoot, 'package.json'), JSON.stringify({ scripts: { build: 'node --check catalog.js' } }));
     write(path.join(workspaceRoot, 'catalog.js'), 'export const count = 9;\n');
@@ -619,18 +870,19 @@ describe('POST /api/chat lifecycle hooks', () => {
       .mockResolvedValueOnce(mockStopStream('The catalog update is implemented.'))
       .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: 'npm run build', cwd: workspaceRoot }))
       .mockResolvedValueOnce(mockToolCallStream('browser_snapshot', {}))
-      .mockResolvedValueOnce(mockStopStream('The catalog now shows 52 unique component cards.'));
+      .mockResolvedValueOnce(mockStopStream('The catalog now shows 52 unique component cards.'))
+      .mockResolvedValueOnce(mockStopStream('BLOCKED: native browser verification is unavailable.'));
 
     const res = await app.invoke('POST', '/api/chat', {
       body: { messages: [{ role: 'user', content: 'fix and verify the Storybook UI catalog in the browser' }], clientContext: 'test' },
     });
 
-    expect(llm.create).toHaveBeenCalledTimes(5);
+    expect(llm.create).toHaveBeenCalledTimes(6);
     expect(parseSse(res.chunks).some(event =>
       event.type === 'content' && /52 unique component cards/.test(event.content)
     )).toBe(true);
     expect(llm.create.mock.calls.some(call => call[0].messages.some(message =>
-      message.role === 'user' && /visible browser\/UI outcome/.test(message.content)
-    ))).toBe(false);
+      message.role === 'user' && /UI changes REQUIRE live ad-hoc/.test(message.content)
+    ))).toBe(true);
   });
 });

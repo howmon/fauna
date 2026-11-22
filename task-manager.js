@@ -283,6 +283,8 @@ function createTask(opts) {
     agents:      _normalizeAgents(opts.agents || opts.agent),
     actions:     opts.actions || [],
     context:     opts.context || '',
+    acceptanceCriteria: opts.acceptanceCriteria || '',
+    qa:          opts.qa || null,
     permissions: {
       browser:  opts.permissions?.browser || false,
       figma:    opts.permissions?.figma || false,
@@ -444,7 +446,7 @@ function updateTask(id, updates) {
   const allowed = ['title', 'description', 'kind', 'status', 'schedule', 'agents', 'actions',
                    'context', 'permissions', 'model', 'maxRetries', 'timeout', 'maxSteps',
                    'result', 'convId', 'targetConvId', 'pipeline', 'lastRunAt', 'nextRunAt',
-                   'projectId', 'projectContextIds'];
+                   'projectId', 'projectContextIds', 'verification'];
   for (const key of allowed) {
     if (key in updates) tasks[idx][key] = updates[key];
   }

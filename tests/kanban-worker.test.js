@@ -406,6 +406,30 @@ describe('_archiveSweep', () => {
 
 // ── finalizeRunSuccess ───────────────────────────────────────────────────
 describe('_finalizeRunSuccess', () => {
+  it('routes stale UI completion through failure even when shell tests pass', async () => {
+    _verify.nextResult = { ok: true, skipped: false, command: 'npm test' };
+    _db.projects.push({ id: 'p1', name: 'P', kanban: {}, qa: { command: 'npm test' } });
+    _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', title: 'Fix UI sidebar',
+      column: 'in_progress', claimedBy: 'ai:o', browserVerification: { ok: true, runId: 'old-run' } }));
+    __test.inFlight.set('c1', { taskId: 'task-1', projectId: 'p1', unsubscribe: () => {} });
+    __test.finalizeRunSuccess('p1', 'c1', { event: 'completed', summary: 'DONE: tests passed' });
+    await flushAsync();
+    expect(_db.items[0].column).not.toBe('done');
+    expect(_db.items[0].runs.at(-1).ok).toBe(false);
+    expect(_db.items[0].comments.some(c => /in-app browser/.test(c.body))).toBe(true);
+  });
+  it('leaves the card in review if the verifier crashes', async () => {
+    const { verifyWorkItem } = await import('../lib/work-item-verifier.js');
+    vi.mocked(verifyWorkItem).mockRejectedValueOnce(new Error('verifier crashed'));
+    _db.projects.push({ id: 'p1', name: 'P', kanban: {} });
+    _db.items.push(_mkItem({ id: 'c1', projectId: 'p1', column: 'in_progress', claimedBy: 'ai:o' }));
+    __test.inFlight.set('c1', { taskId: 'task-1', projectId: 'p1', unsubscribe: () => {} });
+    __test.finalizeRunSuccess('p1', 'c1', { event: 'completed' });
+    await flushAsync();
+    expect(_db.items[0].column).toBe('review');
+    expect(_db.items[0].runs.at(-1).verified).toBe(false);
+    expect(_db.items[0].comments.some(comment => /crashed/.test(comment.body))).toBe(true);
+  });
   it('leaves an unverified card in review when no verifier is configured', async () => {
     _verify.nextResult = { ok: true, skipped: true };
     _db.projects.push({ id: 'p1', name: 'P', kanban: {} });
@@ -853,6 +877,15 @@ describe('claim-time auto-close (pre-flight verifier)', () => {
     _db.items.push(card);
     return { proj, card };
   }
+
+  it('never auto-closes a UI card from a passing pre-flight shell verifier', async () => {
+    const { proj, card } = _setup({ qa: 'npm test' });
+    card.body = 'Fix the sidebar UI';
+    _verify.nextResolved = { command: 'npm test', source: 'project' };
+    _verify.nextResult = { ok: true, skipped: false, command: 'npm test' };
+    expect(await __test.maybeAutoClose(proj, card, card)).toBe(false);
+    expect(card.column).toBe('todo');
+  });
 
   it('auto-closes when card-scoped verifier already passes', async () => {
     const { proj, card } = _setup({ verifyCommand: 'echo ok' });

@@ -184,6 +184,7 @@ function browserAddTab(url, convId) {
     var levelMap = {0:'debug',1:'log',2:'warn',3:'error'};
     var entry = { level: levelMap[e.level]||'log', text: (e.message||'').slice(0, 2000), line: e.line, source: e.sourceId||'' };
     tab.consoleLogs.push(entry);
+    if (entry.level === 'error') tab.consoleErrorCount = (tab.consoleErrorCount || 0) + 1;
     if (tab.consoleLogs.length > 150) tab.consoleLogs.shift();
     _updateConsolePanel();
   });
@@ -1184,6 +1185,10 @@ async function _executeBrowserActionViaExtension(action) {
 
 async function executeBrowserAction(action) {
   action = _normalizeBrowserAction(action);
+  if (action.action === 'verify') return _verifyBrowserJourney(action);
+  if (_browserJourneyBusy && action._journeyToken !== _browserJourneyToken) {
+    return { ok: false, error: 'In-app browser is reserved for an active verification journey' };
+  }
   // Routing order mirrors VS Code/Copilot's lower-risk web flow:
   // 1. Built-in browser webview for normal browser-action blocks.
   // 2. Playwright MCP only when explicitly enabled, or as a final fallback for
@@ -1240,7 +1245,7 @@ async function executeBrowserAction(action) {
     return { ok: true, url: wv.getURL() };
 
   } else if (!wv) {
-    if (!preferPlaywright) {
+    if (!preferPlaywright && !action.forceInternal) {
       var fallbackPwResult = await _executeBrowserActionViaPlaywright(action);
       if (fallbackPwResult) return fallbackPwResult;
     }
@@ -1263,8 +1268,8 @@ async function executeBrowserAction(action) {
       'var el=document.querySelector(' + JSON.stringify(action.selector) + ');' +
       'if(!el)throw new Error("Not found: '+action.selector+'");' +
       'el.scrollIntoView();el.focus();' +
-      'var setter=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,"value")' +
-      '||Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,"value");' +
+      'var proto=el.tagName==="TEXTAREA"?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;' +
+      'var setter=Object.getOwnPropertyDescriptor(proto,"value");' +
       'if(setter&&setter.set){setter.set.call(el,' + JSON.stringify(action.value||action.text||'') + ');}' +
       'else{el.value=' + JSON.stringify(action.value||action.text||'') + ';}' +
       'el.dispatchEvent(new Event("input",{bubbles:true}));' +
@@ -1556,6 +1561,110 @@ async function executeBrowserAction(action) {
   }
 
   throw new Error('Unknown action: ' + action.action);
+}
+
+var _browserJourneyBusy = false;
+var _browserJourneyToken = {};
+async function _verifyBrowserJourney(action) {
+  var evidence = { ok: false, kind: 'browser-journey', source: 'internal',
+    navigated: false, consoleChecked: false, consoleErrors: [], steps: [], checks: [] };
+  if (_browserJourneyBusy) return Object.assign(evidence, { error: 'Another browser journey is running; retry when it finishes.' });
+  _browserJourneyBusy = true;
+  try {
+    if (!/^(?:https?:\/\/|file:\/\/)/i.test(action.url || '')) throw new Error('verify requires the affected page URL');
+    if (!Array.isArray(action.steps) || !action.steps.length || action.steps.length > 20) throw new Error('verify requires 1–20 journey steps');
+    var interacted = false;
+    var hasOutcome = false;
+    action.steps.forEach(function(step) {
+      if (!step || !/^(?:click|type|assert)$/.test(step.action) || !step.selector) throw new Error('Invalid journey step');
+      if (step.action !== 'assert') interacted = true;
+      else {
+        var type = { count: 'number', text: 'string', value: 'string', visible: 'boolean' }[step.property];
+        if (!type || typeof step.expected !== type) throw new Error('Assertion requires a typed expected DOM property');
+        if (interacted) hasOutcome = true;
+      }
+    });
+    if (!hasOutcome) throw new Error('A DOM assertion after a click/type interaction is required');
+    openBrowserPane();
+    var wv = getActiveWebview();
+    if (!wv) throw new Error('In-app browser unavailable');
+    var tab = _getConvTabs().find(function(t) { return t.wv === wv; });
+    if (!tab) throw new Error('In-app console capture unavailable');
+    var errorsBefore = tab.consoleErrorCount || 0;
+    tab.consoleLogs = [];
+    var started = Date.now();
+    var nav = await executeBrowserAction({ action: 'navigate', url: action.url, forceInternal: true,
+      _journeyToken: _browserJourneyToken });
+    if (!nav.ok) throw new Error(nav.error || 'Navigation cancelled');
+    evidence.navigated = true;
+    for (var step of action.steps) {
+      if (Date.now() - started > 45000) throw new Error('Browser journey timed out');
+      if (getActiveWebview() !== wv) throw new Error('Browser target changed during verification');
+      if (step.action !== 'assert') {
+        var usable = await wvExec(wv, '(function(){var el=document.querySelector(' + JSON.stringify(step.selector) +
+          ');return !!(el&&el.getClientRects().length&&getComputedStyle(el).visibility!=="hidden"&&' +
+          '!el.disabled&&el.getAttribute("aria-disabled")!=="true"&&' +
+          '(' + JSON.stringify(step.action) + '!=="type"||!el.readOnly));})()');
+        if (!usable) throw new Error('Interaction target is missing, hidden, disabled, or read-only: ' + step.selector);
+        var result = await executeBrowserAction(Object.assign({}, step, { forceInternal: true,
+          _journeyToken: _browserJourneyToken }));
+        evidence.steps.push({ action: step.action, selector: step.selector, ok: result.ok === true });
+        if (!result.ok) throw new Error(result.error || 'Interaction failed');
+      } else {
+        var check;
+        var deadline = Math.min(started + 45000, Date.now() + 3000);
+        do {
+          var dom = await wvExec(wv, '(function(){var s=' + JSON.stringify(step.selector) +
+            ';var els=Array.from(document.querySelectorAll(s));var el=els[0];return {' +
+            'count:els.length,text:el?(el.innerText||el.textContent||"").trim():null,' +
+            'value:el&&"value" in el?el.value:null,visible:!!(el&&el.getClientRects().length&&' +
+            'getComputedStyle(el).visibility!=="hidden")};})()');
+          var actual = dom[step.property];
+          check = { selector: step.selector, property: step.property, expected: step.expected,
+            actual: actual, ok: actual === step.expected };
+          if (check.ok) break;
+          await new Promise(function(r) { setTimeout(r, 100); });
+        } while (Date.now() < deadline);
+        evidence.checks.push(check);
+        evidence.steps.push({ action: 'assert', ok: check.ok });
+        if (!check.ok) throw new Error('DOM outcome did not match: ' + step.selector);
+      }
+    }
+    await new Promise(function(r) { setTimeout(r, 200); });
+    if (getActiveWebview() !== wv) throw new Error('Browser target changed during verification');
+    var conv = typeof getConv === 'function' ? getConv() : null;
+    if (conv && conv._cancelled) throw new Error('Browser verification cancelled');
+    evidence.url = wv.getURL();
+    evidence.consoleErrors = (tab.consoleLogs || []).filter(function(l) { return l.level === 'error'; }).map(function(l) { return l.text; });
+    if ((tab.consoleErrorCount || 0) > errorsBefore && !evidence.consoleErrors.length) {
+      evidence.consoleErrors.push('Console errors occurred during this journey (older log entries were discarded)');
+    }
+    evidence.consoleChecked = true;
+    if (evidence.consoleErrors.length) throw new Error('Console errors during the UI journey');
+    evidence.ok = true;
+  } catch (error) {
+    evidence.error = error.message;
+  } finally {
+    _browserJourneyBusy = false;
+  }
+  return evidence;
+}
+
+if (typeof window !== 'undefined' && window.faunaApp?.onBrowserTool) {
+  window.faunaApp.onBrowserTool(function(ev) {
+    // Headless tasks use the same visible native panel, never an external
+    // Playwright session. Refuse rather than steal a user's active chat.
+    var conv = typeof getConv === 'function' ? getConv() : null;
+    var result = conv && (conv._streaming || (ev.conversationId && conv.id !== ev.conversationId))
+      ? Promise.resolve({ ok: false, error: 'In-app browser busy or attached to a different conversation' })
+      : executeBrowserAction(Object.assign({}, ev.args, { forceInternal: true }));
+    Promise.resolve(result).catch(function(e) { return { ok: false, error: e.message }; }).then(function(r) {
+      return fetch('/api/client-tool-result', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callId: ev.callId, result: r }),
+      });
+    }).catch(function() {});
+  });
 }
 
 // ── Site crawler ───────────────────────────────────────────────────────────

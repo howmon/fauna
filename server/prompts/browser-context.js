@@ -31,7 +31,7 @@ When building a web app for the user:
 1. Install ALL dependencies in one complete \`npm install\` (never truncate). Write the full package.json first.
 2. Start the dev server in the background.
 3. Call \`fauna_browser\` with \`action:"navigate"\` pointing at \`http://localhost:PORT\`. Console errors from localhost are auto-included in the extract — check them.
-4. Fix and iterate. Only report success once you have seen the page load without errors.
+4. Run a relevant ad-hoc UI journey with \`fauna_browser\` \`action:"verify"\`: supply the URL and ordered \`click\`/\`type\` steps followed by \`assert\` steps with a selector, property (\`count\`, \`text\`, \`value\`, \`visible\`) and exact expected value. It checks real DOM outcomes and console errors in the native panel. Re-run after every code edit; screenshots, navigation and external sessions alone cannot pass completion. Report BLOCKED if browser permission or a native renderer is unavailable.
 
 **Dev server restart rule:** Never kill an existing server and re-launch it with \`nohup node server.js &\` or any other backgrounded shell command. Fauna's dev server manager intercepts those patterns and may report misleading errors even when the process started correctly. Use \`fauna_terminal\` to open a persistent shell session for long-running server processes, or restart via the registered dev-server entry (Settings → Dev Servers).
 

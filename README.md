@@ -50,6 +50,19 @@ Copilot models that require the Responses API (including GPT-5.6 and GPT-6 varia
 
 **Kanban / Autopilot** — Project board where cards drive AI runs end-to-end with retries, comments, and work-item verification. Native + widget-panel alerts on completion / failure / out-of-retries. Live SSE stream at `/api/board/stream`.
 
+**Test-backed completion** — Chat coding changes and Kanban runs execute existing project tests before accepting completion. Kanban uses `card.verifyCommand`, then `project.qa.command`, then detected tests (`test:ci`, `test:unit`, `test`, installed Vitest, or pytest). Chat uses project/task QA or the same detected tests. Tests run outside watch mode with `CI=1`; output and exit codes appear in the activity stream. Later file edits invalidate a pass. Failures are fed back for repair and rechecking; repeated failures block completion. Kanban cards without a verifier, or with a failed/crashed verifier, stay in Review rather than automatically becoming Done. Humans can still override board status. Documentation-only and conversational turns do not need tests.
+
+**Mandatory UI journeys** — UI changes in chat and Kanban also require live, ad-hoc end-to-end checks in Fauna's **in-app browser** after the latest code edit. Native `fauna_browser` with `action:"verify"` navigates the affected URL, executes relevant `click`/`type` steps, polls exact DOM assertions (`count`, `text`, `value`, `visible`), and rejects console errors. Supply the journey appropriate to the changed experience, not a generic smoke click:
+
+```json
+{"action":"verify","url":"http://localhost:3000","steps":[
+  {"action":"click","selector":"#open-settings"},
+  {"action":"assert","selector":"#settings-dialog","property":"visible","expected":true}
+]}
+```
+
+Screenshots, navigation alone, external-browser sessions, arbitrary JavaScript returning "passed", and model prose cannot satisfy this gate. Each later code edit invalidates browser evidence. Results travel through the authoritative `task_result`; Kanban persists browser evidence tied to the current run and rejects Done without it, even when unit tests pass. UI cards never auto-close from a pre-flight shell test. Headless tasks use the attached native renderer via the existing client-tool result path; browser permissions must be granted. Missing permissions, no renderer, busy browser, console/DOM failures, or timeouts block completion rather than silently falling back to external Playwright. Non-UI code, conversation, and documentation retain their existing behavior.
+
 Board runs check the account's live model availability before starting. They use the card's selected model when available, otherwise MAI Code 2, another available MAI model, or another available tool-capable chat model. A card comment records any substitution; saved model preferences stay unchanged. If discovery fails or no suitable model is available, the card is returned to a human with an error instead of guessing from the offline model list. Set **Parallel** (1–10 simultaneous AI items per project) on a project board, or choose a project and set its limit from **All project tasks**. Lowering a limit lets existing runs finish before new ones start.
 
 **Durable runs** — Chat, task, workflow, Kanban, and sub-agent execution share persisted run metadata and append-only event traces. Streams can replay from a cursor after disconnects; runs support cancellation, steering, queued follow-ups, persisted approvals/user pauses, parent-child linkage, analytics, and JSON or OTLP export from the Runs workspace.

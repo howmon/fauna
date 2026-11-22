@@ -119,4 +119,42 @@ describe('task-runner chat parity', () => {
       verifier: 'autonomous-task-failure',
     }));
   });
+
+  it('uses the host final decision instead of a rejected streamed DONE', async () => {
+    store.set('t4', {
+      id: 't4', title: 'Fix code', kind: 'cron', permissions: { shell: { cwd: '/tmp/proj' } },
+      qa: { command: 'npm test' }, maxSteps: 3, timeout: 30000,
+    });
+    globalThis.fetch = vi.fn(async (_url, opts) => {
+      expect(JSON.parse(opts.body)).toMatchObject({
+        taskCwd: '/tmp/proj', shellEnabled: true, qa: { command: 'npm test' },
+      });
+      return new Response(sse([
+        { type: 'content', content: 'DONE: implemented' },
+        { type: 'content', content: '\nDONE: repaired' },
+        { type: 'task_result', status: 'BLOCKED', content: 'Tests failed with exit code 1' },
+      ]));
+    });
+    await runner.runTask('t4');
+    expect(store.get('t4')).toMatchObject({ status: 'failed', error: 'Tests failed with exit code 1' });
+  });
+
+  it.each([true, false])('blocks stale DONE for UI work with buffered=%s', async buffered => {
+    store.set('ui', { id: 'ui', title: 'Fix sidebar UI', kind: 'cron',
+      permissions: { shell: true, browser: false }, kanban: { cardId: 'card-ui' },
+      maxSteps: 1, timeout: 30000 });
+    globalThis.fetch = vi.fn(async (_url, opts) => {
+      expect(JSON.parse(opts.body)).toMatchObject({ browserEnabled: false, workItemId: 'card-ui' });
+      const text = sse([
+        { type: 'content', content: 'DONE: fixed UI' },
+        { type: 'task_result', status: 'BLOCKED', content: 'DONE: stale claim, browser unavailable',
+          verification: { ok: false, browser: { ok: false } } },
+        { type: 'content', content: 'DONE: another stale completion' },
+      ]);
+      return buffered ? { ok: true, text: async () => text } : new Response(text);
+    });
+    await runner.runTask('ui');
+    expect(store.get('ui').status).toBe('failed');
+    expect(store.get('ui').verification.browser.ok).toBe(false);
+  });
 });

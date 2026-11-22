@@ -26,6 +26,7 @@
 
 import fs   from 'fs';
 import path from 'path';
+import { isUiChange, passedBrowserVerification } from './lib/browser-verification.js';
 import os   from 'os';
 import {
   getAllProjects, getProject, getProjectBoard,
@@ -296,7 +297,7 @@ function _buildTaskContext(project, card) {
   lines.push('');
   lines.push('## How to finish');
   lines.push('1. Do the work end-to-end (read files, run shells, edit code as needed).');
-  lines.push('2. When you believe it is complete, call `fauna_workitem_verify` to run the verifier (per-card `verifyCommand`, else project `qa.command`). The result is recorded on the card.');
+  lines.push('2. Before claiming completion, run relevant tests after your last edit, then call `fauna_workitem_verify` (per-card `verifyCommand`, else project `qa.command`, else auto-detected project tests). The real command output and exit code are recorded on the card. Read/search/write tool calls are not test evidence.');
   lines.push('3. If verification passed, call `fauna_workitem_comment` with a short summary, then `fauna_workitem_move` to column="done". Cards with a verifier configured CANNOT be moved to done without a passing verification — the API will reject it.');
   lines.push('4. If verification failed, fix the failures and re-verify. After 2 failed verifications hand back to a human via `fauna_workitem_update` (assignee="human") + `fauna_workitem_move` column="todo".');
   lines.push('5. If you get blocked or need a decision from the user, call `fauna_workitem_comment` describing the blocker and `fauna_workitem_move` with column="todo" + assignee="human" via `fauna_workitem_update`.');
@@ -379,9 +380,11 @@ function _spawnTaskForCard(project, card, model) {
     convId: card.originConvId || null,
     agents: agentName ? [agentName] : [],
     context: _buildTaskContext(project, card),
+    acceptanceCriteria: card.acceptance || '',
+    qa: card.verifyCommand ? { command: card.verifyCommand } : (project.qa || null),
     // Skill bindings consumed by task-runner._resolveTaskSkills.
     skills: boundSkills,
-    kanban: { column, skillBindings },
+    kanban: { column, skillBindings, cardId: card.id },
     permissions: {
       // Anchor the shell to the project root when we know it, otherwise
       // fall through to the global default (HOME). Without this the model
@@ -528,6 +531,8 @@ export async function recoverInterruptedRuns() {
 // intentional gate — a greenfield project where `npm test` passes
 // trivially shouldn't auto-close every new card.
 async function _maybeAutoClose(project, card, claimedItem) {
+  if (card.browserVerificationRequired
+    || isUiChange((card.title || '') + '\n' + (card.description || '') + '\n' + (card.body || ''))) return false;
   const mod = await import('./lib/work-item-verifier.js');
   if (!mod.resolveVerifyCommand) return false;
   const resolved = mod.resolveVerifyCommand(project, claimedItem || card);
@@ -655,6 +660,18 @@ function _onTaskEvent(projectId, cardId, ev) {
 
 function _finalizeRunSuccess(projectId, cardId, ev) {
   const ent = _inFlight.get(cardId);
+  const currentBoard = getProjectBoard(projectId);
+  const currentCard = currentBoard?.columns ? _findCard(currentBoard, cardId) : null;
+  if (currentCard && (currentCard.browserVerificationRequired
+    || isUiChange((currentCard.title || '') + '\n' + (currentCard.description || '') + '\n' + (currentCard.body || '')))) {
+    const browser = currentCard.browserVerification;
+    if (!passedBrowserVerification(browser) || !ent?.taskId || browser.runId !== ent.taskId) {
+      _finalizeRunFailure(projectId, cardId, {
+        ...ev, error: 'Mandatory in-app browser journey failed, is stale, or is unavailable',
+      });
+      return;
+    }
+  }
   if (ent && ent.unsubscribe) ent.unsubscribe();
   _untrackInFlight(cardId);
   _persistInFlight();
@@ -678,7 +695,7 @@ function _finalizeRunSuccess(projectId, cardId, ev) {
   // Resolution order:
   //   1. card.verifyCommand
   //   2. project.qa.command
-  //   3. (none) → trust path, move straight to done
+  //   3. auto-detected tests; no verifier or a crash → review, never done
   // We run the verifier in the background and only then move the card.
   // This is fire-and-forget: errors are logged and the card is bounced
   // to 'review' as a fail-safe.
@@ -744,9 +761,9 @@ function _finalizeRunSuccess(projectId, cardId, ev) {
         runEntry: { taskId: ent && ent.taskId, finishedAt: Date.now(), ok: true, verified: false, infrastructureFailure: true },
       }, { actor: 'human' });
       pokeNow();
-    } else if (verifyResult && (verifyResult.ok === false || verifyResult.skipped === true)) {
+    } else if (!verifyResult || verifyResult.ok !== true || verifyResult.skipped === true) {
       // Verifier ran and failed → leave in review for a human, do not advance.
-      if (verifyResult.skipped === true) {
+      if (verifyResult?.skipped === true) {
         addWorkItemComment(projectId, cardId, { author: 'ai',
           body: 'Autopilot finished, but this card has no verification command. It was left in Review as unverified. Configure card.verifyCommand or project.qa.command to allow automatic completion.',
         });
@@ -754,15 +771,22 @@ function _finalizeRunSuccess(projectId, cardId, ev) {
       moveWorkItem(projectId, cardId, {
         column: 'review',
         claimedBy: null,
-        runEntry: { taskId: ent && ent.taskId, finishedAt: Date.now(), ok: true, verified: false, verificationSkipped: verifyResult.skipped === true },
+        runEntry: { taskId: ent && ent.taskId, finishedAt: Date.now(), ok: true, verified: false, verificationSkipped: verifyResult?.skipped === true },
       }, { actor: 'ai', strict: true });
     } else {
       // A verifier ran and passed, so the card can advance to done.
-      moveWorkItem(projectId, cardId, {
+      const moved = moveWorkItem(projectId, cardId, {
         column: 'done',
         claimedBy: null,
         runEntry: { taskId: ent && ent.taskId, finishedAt: Date.now(), ok: true, verified: verifyResult && verifyResult.ok === true },
       }, { actor: 'ai', strict: true });
+      if (!moved.ok) {
+        verifyResult = { ...verifyResult, ok: false, error: moved.error };
+        addWorkItemComment(projectId, cardId, { author: 'ai',
+          body: 'Completion gate rejected Done: ' + moved.error + ' — leaving in Review.',
+        });
+        moveWorkItem(projectId, cardId, { column: 'review', claimedBy: null }, { actor: 'ai', strict: true });
+      }
     }
 
     appendAutonomousRunLog(projectId, {

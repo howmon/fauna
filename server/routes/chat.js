@@ -62,7 +62,7 @@ import { buildProjectProfile, formatProfileForPrompt } from '../lib/profile.js';
 import { extractFacts as extractMemoryFacts } from '../lib/memory-extractor.js';
 import { extractCorrections } from '../lib/failure-learning.js';
 import { buildAgentPolicy, discoverCustomizations, filterToolsByPolicy, resolveToolPolicy } from '../../lib/customization-registry.js';
-import { getProjectSystemContext, buildContextPayload, getProject, appendAutonomousRunLog, resolveProjectSourceRoot } from '../../project-manager.js';
+import { getProjectSystemContext, buildContextPayload, getProject, appendAutonomousRunLog, resolveProjectSourceRoot, setWorkItemBrowserVerification } from '../../project-manager.js';
 import { estimateTokens, computeBudget } from '../lib/token-budget.js';
 import { summarizeHistory } from '../lib/summarize-history.js';
 import { withTimeout } from '../lib/async-utils.js';
@@ -74,6 +74,8 @@ import { ChatTracer } from '../../lib/run-ledger.js';
 import { buildDesignTaskContext } from '../../design-prompts.js';
 import { formatImageAssetContext, persistConversationImageAssets } from '../lib/attachment-assets.js';
 import { projectCapabilities } from '../lib/capability-projection.js';
+import { detectAutoVerifyCommand } from '../../lib/verification-command.js';
+import { isUiChange, passedBrowserVerification } from '../../lib/browser-verification.js';
 
 // ── Tool-driven Decision Prompt bridge ────────────────────────────────────
 // Any tool (self-tool, agent tool, MCP tool) can pause the agent and
@@ -252,11 +254,23 @@ function _patchActivityFiles(patchText) {
   return files;
 }
 
+function nativeBrowserWindow(windows = []) {
+  return windows.find(win => {
+    if (win.isDestroyed?.() || !win.webContents?.send || !win.webContents?.getURL) return false;
+    try {
+      const url = new URL(win.webContents.getURL());
+      return /^(?:localhost|127\.0\.0\.1|\[::1\])$/.test(url.hostname)
+        && ['/', '/index.html'].includes(url.pathname);
+    } catch (_) { return false; }
+  });
+}
+
 export function buildToolActivityDescriptor(toolName, args = {}) {
   const descriptor = { kind: 'tool', label: formatToolLabel(toolName, args), toolName };
   if (toolName === 'fauna_shell_exec') {
     return { ...descriptor, kind: 'shell', label: 'Ran shell command', command: scrubSecrets(String(args.command || '')).text, cwd: String(args.cwd || '') };
   }
+
   if (toolName === 'fauna_read_file') {
     const file = _activityDisplayPath(args.path);
     const startLine = Math.max(1, Number(args.startLine) || 1);
@@ -776,6 +790,7 @@ export function registerChatRoute(app, {
         autonomousMode: bodyAutonomousMode = null,
         acceptanceCriteria: bodyAcceptance = null,
         qa: bodyQa = null,
+        taskCwd = null, shellEnabled = true, browserEnabled = true, workItemId = null,
         deploy: bodyDeploy = null,
         deployApproved: bodyDeployApproved = false,
         headlessTask: bodyHeadlessTask = false,
@@ -835,9 +850,10 @@ export function registerChatRoute(app, {
     const effectiveQa = (bodyQa && typeof bodyQa === 'object')
       ? bodyQa
       : (_projectRecord?.qa || null);
-    const qaCommand = autonomousMode && effectiveQa && typeof effectiveQa.command === 'string'
+    const qaCommand = effectiveQa && typeof effectiveQa.command === 'string'
       ? effectiveQa.command.trim()
       : '';
+    let verificationCwd = _projectRecord?.rootPath || taskCwd || workspaceRoot;
 
     // Deploy gate (Codex-style publish hook). Runs ONLY when autonomous,
     // a command is configured, AND the client passed deployApproved:true on
@@ -1856,7 +1872,10 @@ export function registerChatRoute(app, {
 
         // fauna_shell_exec adapter — runs server-side, refuses unsafe commands
         // so the user keeps the markdown ```bash review path for risky ops.
-        runShell: async ({ command, cwd, timeoutMs, maxOutputBytes, reason } = {}) => {
+        runShell: async ({ command, cwd, timeoutMs, maxOutputBytes, reason, structured = false } = {}) => {
+          if (shellEnabled === false) {
+            return JSON.stringify({ ok: false, error: 'Shell access is disabled for this task' });
+          }
           if (!command || typeof command !== 'string') {
             return JSON.stringify({ ok: false, error: 'command (string) required' });
           }
@@ -1887,6 +1906,7 @@ export function registerChatRoute(app, {
               if (fs.existsSync(_projectRecord.rootPath)) effectiveCwd = _projectRecord.rootPath;
             } catch (_) { /* ignore — fall back below */ }
           }
+          if (!effectiveCwd && taskCwd) effectiveCwd = taskCwd;
           const shellWorkDir = effectiveCwd || os.homedir();
           const launchProjectDir = commandWorkingDirectory(command, shellWorkDir);
           const inspectedCommand = commandWithPackageScript(command, launchProjectDir);
@@ -1970,7 +1990,7 @@ export function registerChatRoute(app, {
               shellBin,
               isWin,
               augmentedPath,
-              env: npmEnv,
+              env: reason === 'task completion verification' ? { ...npmEnv, CI: '1' } : npmEnv,
               timeoutMs: typeof timeoutMs === 'number' ? Math.min(timeoutMs, 600000) : undefined,
               maxOutputChars: typeof maxOutputBytes === 'number' && maxOutputBytes > 0
                 ? Math.min(maxOutputBytes, 500_000)
@@ -2002,7 +2022,7 @@ export function registerChatRoute(app, {
               }
             } catch (_) { /* non-fatal */ }
           }
-          return formatShellResultForLLM(result);
+          return structured ? scrubSecrets(JSON.stringify(result)).text : formatShellResultForLLM(result);
         },
 
         // fauna_apply_patch adapter — synchronous, throws on failure
@@ -2028,6 +2048,16 @@ export function registerChatRoute(app, {
         // Used by fauna_browser to run webview-driven actions inside the same
         // assistant turn (no markdown round-trip).
         callClientTool: (name, args, { timeoutMs = CLIENT_TOOL_TIMEOUT_MS } = {}) => {
+          if (name === 'browser' && (!browserEnabled || noTools
+            || (bodyHeadlessTask && _projectRecord && !_projectRecord.permissions?.browser))) {
+            return Promise.reject(new Error('Browser permission is disabled for this task'));
+          }
+          const nativeWindow = bodyHeadlessTask && name === 'browser'
+            ? nativeBrowserWindow(getMainWindows() || [])
+            : null;
+          if (bodyHeadlessTask && name === 'browser' && !nativeWindow) {
+            return Promise.reject(new Error('In-app browser unavailable: no native renderer attached'));
+          }
           return new Promise((resolve, reject) => {
             const callId = 'ct_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
             const timer = setTimeout(() => {
@@ -2045,7 +2075,10 @@ export function registerChatRoute(app, {
             };
             if (upstreamAbort.signal.aborted) { onAbort(); return; }
             upstreamAbort.signal.addEventListener('abort', onAbort, { once: true });
-            send({ type: 'client_tool_pending', callId, name, args });
+            if (nativeWindow) nativeWindow.webContents.send('fauna:browser-tool', {
+              callId, name, args, conversationId: req.body?.conversationId || null,
+            });
+            else send({ type: 'client_tool_pending', callId, name, args });
           });
         },
 
@@ -2347,6 +2380,8 @@ export function registerChatRoute(app, {
       let blockedEvidenceNudgeFired = false;
       let qaRan = false;
       let qaResultSummary = null;
+      let codeMutationUsed = false;
+      let verificationFailures = 0;
       let deployRan = false;
       let deployResultSummary = null;
       let stopHooksRan = false;
@@ -2392,6 +2427,16 @@ export function registerChatRoute(app, {
       // requests like "rewrite as a 30-page docx" that used to slip past the original verb list
       // (transcript: fauna-30-Page-Strategy-Report-Rewrite).
       const _writeIntentTurn = /\b(?:fix|fixes|fixed|implement|resolve|repair|patch|update|change|modify|edit|write|create|add|remove|delete|hide|replace|refactor|migrate|install|extract|port|integrate|copy|move|bring|build\s+out|make\s+(?:all|the|this)|proceed|rewrite|rebuild|regenerate|generate|scaffold|produce|draft|assemble|compose|render(?:\s+out)?)\b/i.test(_lastUserQuery || '');
+      let browserVerificationRequired = req.body?.requireBrowserVerification === true
+        || ((_writeIntentTurn || autonomousMode) && isUiChange(_lastUserQuery));
+      let browserVerification = null;
+      const persistBrowserVerification = () => {
+        if (projectId && workItemId && browserVerificationRequired) {
+          setWorkItemBrowserVerification(projectId, workItemId, browserVerification
+            ? { ...browserVerification, runId: requestedRunId || runId, ts: Date.now() } : null);
+        }
+      };
+      persistBrowserVerification();
       const MUTATING_TOOLS = new Set([
         // File / patch mutations
         'fauna_write_file', 'fauna_write_files', 'fauna_apply_patch',
@@ -2438,11 +2483,20 @@ export function registerChatRoute(app, {
       const VALIDATION_TOOLS = new Set([
         'fauna_doctor', 'fauna_verify_build', 'fauna_project_audit',
       ]);
+      const FILE_MUTATION_TOOLS = new Set([
+        'fauna_write_file', 'fauna_write_files', 'fauna_apply_patch',
+        'fauna_replace_string', 'fauna_write_offloaded', 'fauna_rename_symbol',
+        'agent_write_file', 'agent_write_files', 'agent_str_replace', 'agent_apply_patch',
+      ]);
+      const invalidateVerification = () => {
+        codeMutationUsed = true;
+        validationToolUsed = false;
+        qaRan = false;
+        qaResultSummary = null;
+      };
       const _isReadOnlyShellCommand = (command) => {
         const text = String(command || '').trim();
         if (!text) return true;
-        if (/\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|lint|typecheck|check|build)\b/i.test(text)) return true;
-        if (/\b(?:tsc|eslint|vitest|jest|pytest|cargo\s+test|go\s+test|mvn\s+test|gradle\s+test)\b/i.test(text)) return true;
         if (/\b(?:npm|pnpm|yarn|bun)\s+(?:install|add|remove|update|upgrade|ci)\b/i.test(text)) return false;
         if (/\b(?:python\d*|node)\s+-?\s*<</i.test(text)) return false;
         if (/\b(?:touch|mkdir|rm|rmdir|mv|cp|install|tee|sed\s+-i|perl\s+-pi|python\d*\s+-c|node\s+-e|prisma\s+(?:migrate|db\s+push|generate|db\s+seed))\b/i.test(text)) return false;
@@ -2465,7 +2519,7 @@ export function registerChatRoute(app, {
         if (toolName === 'fauna_browser') {
           const action = String(args?.action || '').toLowerCase();
           if (!action) return false;
-          return /^(?:navigate|goto|open|click|dblclick|hover|type|fill|press|key|scroll|drag|select|upload|reload|back|forward|new_tab|close|wait_for|wait|submit|focus|blur|set_(?:value|state)|record|start_recording|stop_recording)$/.test(action);
+          return /^(?:verify|navigate|goto|open|click|dblclick|hover|type|fill|press|key|scroll|drag|select|upload|reload|back|forward|new_tab|close|wait_for|wait|submit|focus|blur|set_(?:value|state)|record|start_recording|stop_recording)$/.test(action);
         }
         // Playwright MCP-style browser tools
         return /^browser_(?:navigate|goto|click|dblclick|hover|type|fill|press|key(?:_press)?|scroll|drag|select|upload|reload|back|forward|new_tab|close|wait|wait_for|submit|focus|record|start_recording|stop_recording)/i.test(String(toolName || ''));
@@ -3150,7 +3204,7 @@ export function registerChatRoute(app, {
                 }
               }
               // Route to custom MCP servers discovered from Settings -> Custom Servers.
-              else if (customMcpToolNames.has(toolName) && customMcp?.callTool) {
+              else if (toolName !== 'fauna_browser' && customMcpToolNames.has(toolName) && customMcp?.callTool) {
                 result = await withTimeout(
                   customMcp.callTool(toolName, args),
                   30000,
@@ -3159,7 +3213,8 @@ export function registerChatRoute(app, {
               }
               // Route to self-tools (memory, models, settings, etc.)
               else if (isSelfTool(toolName)) {
-                if (toolName === 'fauna_browser' && _hasSharedBrowserTabContext && !args?.forceInternal) {
+                if (toolName === 'fauna_browser' && _hasSharedBrowserTabContext && !args?.forceInternal
+                  && !(browserVerificationRequired && args?.action === 'verify')) {
                   const browserUrl = String(args?.url || '');
                   const requiresInternalBrowser = /^(?:https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)|file:\/\/)/i.test(browserUrl);
                   if (!requiresInternalBrowser) {
@@ -3288,16 +3343,40 @@ export function registerChatRoute(app, {
               }
               const activityResult = buildToolActivityResult(toolName, args, toolContent);
               if (activityResult.status === 'failed') toolFailed = true;
+              if (toolFailed && toolName === 'fauna_shell_exec' && _isValidationShellCommand(args?.command)) {
+                validationToolUsed = false;
+                qaRan = false;
+              }
               if (!toolFailed) {
                 if (MUTATING_TOOLS.has(toolName)) {
                   mutatingToolUsed = true;
                   runtimeVerificationUsed = false;
                 }
+                if (FILE_MUTATION_TOOLS.has(toolName)) {
+                  const files = buildToolActivityDescriptor(toolName, args).files
+                    || _patchActivityFiles(args?.patch)
+                      .concat(args?.path || args?.filePath || args?.file_path || [])
+                      .concat(Array.isArray(args?.files) ? args.files : []);
+                  if (!files.length || files.some(file => !/\.(?:md|txt|rst|adoc)$/i.test(
+                    typeof file === 'string' ? file : file.path || '',
+                  ))) {
+                    browserVerificationRequired ||= isUiChange('', files);
+                    browserVerification = null;
+                    persistBrowserVerification();
+                    if (args?.cwd) verificationCwd = args.cwd;
+                    invalidateVerification();
+                  }
+                }
                 if (VALIDATION_TOOLS.has(toolName)) validationToolUsed = true;
                 if (toolName === 'fauna_shell_exec') {
                   if (!_isReadOnlyShellCommand(args?.command)) {
+                    browserVerificationRequired ||= isUiChange(args?.command, [args?.command || '']);
+                    browserVerification = null;
+                    persistBrowserVerification();
                     mutatingToolUsed = true;
                     runtimeVerificationUsed = false;
+                    verificationCwd = commandWorkingDirectory(args?.command, args?.cwd || _projectRecord?.rootPath || taskCwd || os.homedir());
+                    invalidateVerification();
                   }
                   if (_isValidationShellCommand(args?.command)) validationToolUsed = true;
                 }
@@ -3306,6 +3385,14 @@ export function registerChatRoute(app, {
                   runtimeVerificationUsed = false;
                 }
                 if (_isRuntimeVerificationTool(toolName, args)) runtimeVerificationUsed = true;
+              }
+              if (toolName === 'fauna_browser' && args?.action === 'verify') {
+                try { browserVerification = JSON.parse(toolContent); }
+                catch (_) { browserVerification = { ok: false, error: 'Invalid browser verification output' }; }
+                if (postHooks.blocked || toolFailed || !passedBrowserVerification(browserVerification)) {
+                  browserVerification = { ...browserVerification, ok: false };
+                }
+                persistBrowserVerification();
               }
               send({ type: 'tool_activity_result', callId: tc.id, name: toolName, ...activityResult });
               allMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolContent });
@@ -3421,7 +3508,13 @@ export function registerChatRoute(app, {
             // multi-file refactors without catching the actual failure mode.
 
             // Deduplicate: same tool + same args already called
-            if (toolCallsSeen.has(callKey)) {
+            if (toolName === 'fauna_browser' && args?.action === 'verify') {
+              browserVerification = null;
+              persistBrowserVerification();
+            }
+            if (toolCallsSeen.has(callKey) && toolName !== 'fauna_workitem_verify'
+              && toolName !== 'fauna_browser'
+              && !(toolName === 'fauna_shell_exec' && _isValidationShellCommand(args?.command))) {
               allMessages.push({ role: 'tool', tool_call_id: tc.id, content: toolCallsSeen.get(callKey) });
               continue;
             }
@@ -3558,6 +3651,13 @@ export function registerChatRoute(app, {
           allMessages.push({ role: 'user', content: 'Your previous response was cut off mid-output. Continue EXACTLY where you left off — do NOT repeat anything already written. Do NOT narrate or explain, just output the remaining content.' });
           // keep continueLoop = true
         } else {
+          const completionRequested = !/^\s*(?:TASK_FAILED|BLOCKED|NEEDS-INPUT)\s*:/i.test(assistantText || '');
+          if (codeMutationUsed && _claimsVerifiedBrowserOutcome(assistantText)) {
+            browserVerificationRequired = true;
+            persistBrowserVerification();
+          }
+          const verificationCommand = qaCommand || ((codeMutationUsed || (autonomousMode && (_projectRecord?.rootPath || taskCwd)))
+            ? detectAutoVerifyCommand(verificationCwd) : null);
           if (!assistantText.trim() && pendingCalls.length === 0 && !streamUsage && !finishReason) {
             if (noOutputStreamRetries < 1) {
               noOutputStreamRetries++;
@@ -3609,18 +3709,94 @@ export function registerChatRoute(app, {
             allMessages.push({ role: 'assistant', content: assistantText || '' });
             allMessages.push({ role: 'user', content: '[System: The user asked for implementation/fixes, but this turn only inspected/read/audited files and made no concrete mutation. Do NOT summarize or ask to continue. Make the smallest safe edit NOW using `fauna_apply_patch`, `fauna_replace_string`, `fauna_write_file`, or another real mutation tool. After the first edit, run a focused validation. If no edit is possible, respond with BLOCKED: and the exact blocker.]' });
             // keep continueLoop = true
+          } else if (completionRequested && verificationCommand && !qaRan
+            && (codeMutationUsed || (autonomousMode && /^\s*(?:DONE|TASK_COMPLETE)\s*:/i.test(assistantText || '')))) {
+            const name = 'autonomous_qa_gate';
+            const callId = 'verification-' + turnUsage.iterations;
+            const args = { command: verificationCommand, cwd: verificationCwd };
+            send({
+              type: 'tool_call', name, callId, args, command: verificationCommand,
+              label: 'Run completion checks', activity: buildToolActivityDescriptor('fauna_shell_exec', args),
+            });
+            let result;
+            try {
+              const shellTool = { type: 'function', function: { name: 'fauna_shell_exec' } };
+              const policyDenied = effectiveToolPolicy && !filterToolsByPolicy([shellTool], effectiveToolPolicy).length;
+              const preHooks = await runHooks(customizationRecords, 'PreToolUse', {
+                toolName: 'fauna_shell_exec', args, agentName: agentName || null,
+                conversationId: req.body?.conversationId || null,
+              }, { cwd: verificationCwd });
+              result = noTools || policyDenied || preHooks.blocked || preHooks.permissionDecision === 'deny'
+                ? JSON.stringify({ ok: false, error: preHooks.stopReason || 'Tool policy disables shell verification' })
+                : await selfToolContext.runShell({
+                  command: verificationCommand, cwd: verificationCwd,
+                  reason: 'task completion verification', timeoutMs: 300000, structured: true,
+                });
+              const parsed = JSON.parse(result);
+              qaResultSummary = {
+                ok: parsed.ok === true && parsed.exitCode === 0 && !parsed.killed && !parsed.timedOut,
+                command: verificationCommand, exitCode: parsed.exitCode ?? null,
+                output: result.slice(0, 8000),
+              };
+            } catch (error) {
+              console.warn('[chat] completion verification failed:', error.message);
+              result = JSON.stringify({ ok: false, error: error.message });
+              qaResultSummary = { ok: false, command: verificationCommand, error: error.message };
+            }
+            send({ type: 'tool_result', name, result });
+            send({ type: 'tool_activity_result', name, callId, ...buildToolActivityResult('fauna_shell_exec', args, result) });
+            qaRan = qaResultSummary.ok;
+            validationToolUsed = qaRan;
+            allMessages.push({ role: 'assistant', content: assistantText || '' });
+            if (qaRan) {
+              allMessages.push({ role: 'user', content: '[System: Completion verification PASSED. Command: `' + verificationCommand + '`. Output:\n' + result.slice(0, 8000) + '\nNow give your final summary citing this actual result. If you edit again, verification must run again.]' });
+            } else {
+              verificationFailures++;
+              if (verificationFailures >= 3 || noTools || shellEnabled === false) {
+                const error = 'Completion blocked: verification did not pass. Command: ' + verificationCommand + '\n' + result.slice(0, 4000);
+                send({ type: 'error', error });
+                send({ type: 'task_result', status: 'BLOCKED', content: error });
+                send({ type: 'done', finish_reason: 'verification_failed', verification: qaResultSummary });
+                continueLoop = false;
+              } else {
+                allMessages.push({ role: 'user', content: '[System: Completion verification FAILED. Command: `' + verificationCommand + '`. Output:\n' + result.slice(0, 8000) + '\nFix the failure and retry. Do not claim DONE: or TASK_COMPLETE until the check passes. If this is an environmental blocker, respond BLOCKED: with the actual error.]' });
+              }
+            }
           } else if (_writeIntentTurn && mutatingToolUsed && !validationToolUsed && validationRequiredNudges < MAX_VALIDATION_REQUIRED_NUDGES && !/^\s*(?:BLOCKED|NEEDS-INPUT)\s*:/i.test(assistantText || '')) {
             validationRequiredNudges++;
             console.log('[chat] write-intent mutation without validation detected — forcing focused validation (' + validationRequiredNudges + '/' + MAX_VALIDATION_REQUIRED_NUDGES + ')');
             allMessages.push({ role: 'assistant', content: assistantText || '' });
             allMessages.push({ role: 'user', content: '[System: You made a concrete change, but you have not validated it. Run the cheapest relevant validation NOW (for example `npm run build`, a focused test, lint/typecheck, or another project-specific check). Do not give the final summary until validation has run. If validation cannot run, respond with BLOCKED: and the exact reason.]' });
             // keep continueLoop = true
-          } else if (_writeIntentTurn && mutatingToolUsed && _claimsVerifiedBrowserOutcome(assistantText) && !runtimeVerificationUsed && runtimeVerificationNudges < MAX_RUNTIME_VERIFICATION_NUDGES && !/^\s*(?:BLOCKED|NEEDS-INPUT)\s*:/i.test(assistantText || '')) {
+          } else if (completionRequested && codeMutationUsed && !validationToolUsed && validationRequiredNudges >= MAX_VALIDATION_REQUIRED_NUDGES) {
+            const error = 'Completion blocked: code changed but no successful post-edit validation was run. Configure a verification command or run the relevant project checks.';
+            qaResultSummary = { ok: false, error };
+            send({ type: 'error', error });
+            send({ type: 'task_result', status: 'BLOCKED', content: error });
+            send({ type: 'done', finish_reason: 'verification_missing' });
+            continueLoop = false;
+          } else if (completionRequested && browserVerificationRequired && !passedBrowserVerification(browserVerification)) {
             runtimeVerificationNudges++;
-            console.log('[chat] visible-runtime claim without post-edit browser evidence — forcing verification (' + runtimeVerificationNudges + '/' + MAX_RUNTIME_VERIFICATION_NUDGES + ')');
-            allMessages.push({ role: 'assistant', content: assistantText || '' });
-            allMessages.push({ role: 'user', content: '[System: You claimed a visible browser/UI outcome without any successful browser inspection after the last mutation. A build, running process, open port, stale dev server, or HMR assumption does NOT prove the rendered behavior. Inspect the actual post-edit page now using a browser snapshot/DOM evaluation/screenshot and check relevant console output. Verify the specific DOM state or measured count the user asked about. If browser verification is unavailable, report the implementation as UNVERIFIED with the precise reason; do not say it "should now" work and do not ask the user to confirm it for you.]' });
-            // keep continueLoop = true
+            if (runtimeVerificationNudges > MAX_RUNTIME_VERIFICATION_NUDGES || noTools || !browserEnabled
+              || (bodyHeadlessTask && ((_projectRecord && !_projectRecord.permissions?.browser)
+                || !nativeBrowserWindow(getMainWindows() || [])))) {
+              const unavailable = noTools ? 'Tool execution is disabled in this session.'
+                : (!browserEnabled || (bodyHeadlessTask && _projectRecord && !_projectRecord.permissions?.browser))
+                  ? 'Browser permission is disabled for this task.'
+                  : bodyHeadlessTask && !nativeBrowserWindow(getMainWindows() || [])
+                    ? 'No native Fauna renderer is attached; external/headless Playwright cannot replace the in-app browser.'
+                    : null;
+              const error = 'Completion blocked: mandatory in-app browser verification did not pass. '
+                + (unavailable || browserVerification?.error || 'Run a relevant UI interaction journey with DOM assertions and console checks after the latest edit; screenshots/navigation alone are not E2E.');
+              qaResultSummary = { ...(qaResultSummary || {}), ok: false, browser: browserVerification || { ok: false, error } };
+              send({ type: 'error', error });
+              send({ type: 'task_result', status: 'BLOCKED', content: error, verification: qaResultSummary });
+              send({ type: 'done', finish_reason: 'browser_verification_failed', verification: qaResultSummary });
+              continueLoop = false;
+            } else {
+              allMessages.push({ role: 'assistant', content: assistantText || '' });
+              allMessages.push({ role: 'user', content: '[System: UI changes REQUIRE live ad-hoc end-to-end verification in the IN-APP browser before completion. Call fauna_browser action:"verify" with the affected URL and relevant ordered steps: click/type, then assert the real DOM count/text/value/visible expected outcome. It navigates and checks console errors itself. Exercise the changed user journeys, not unrelated buttons. A screenshot, unit test, arbitrary evaluate return value, or claimed success is insufficient. Fix failed outcomes and retry; every code edit invalidates evidence. If permissions or the native renderer are unavailable, respond BLOCKED: with that precise reason.]' });
+            }
           // If tools were called but no text was produced, prompt a summary so the user sees something
           } else if (toolCallCount > 0 && !assistantText.trim() && continueCount < MAX_CONTINUES) {
             continueCount++;
@@ -3951,53 +4127,6 @@ export function registerChatRoute(app, {
               console.log('[chat] autonomous: BLOCKED without blocker evidence — nudging once');
               allMessages.push({ role: 'assistant', content: assistantText });
               allMessages.push({ role: 'user', content: '[System: You emitted BLOCKED: without concrete blocker evidence. Attempt the blocked action if it is safe, then cite the failed command/tool/dependency and its observable error or status. Use NEEDS-INPUT: instead when only a user decision or missing information is required. Re-emit the appropriate terminal marker with specific evidence.]' });
-            } else if (autonomousMode && finalMarker === 'DONE' && qaCommand && !qaRan) {
-              qaRan = true;
-              console.log('[chat] autonomous QA gate: running `' + qaCommand + '`');
-              try {
-                send({ type: 'tool_call', name: 'autonomous_qa_gate', args: { command: qaCommand } });
-                const qaResultJson = await selfToolContext.runShell({
-                  command: qaCommand,
-                  cwd: _projectRecord?.rootPath || undefined,
-                  reason: 'autonomous qa gate',
-                });
-                let parsed = null;
-                try { parsed = JSON.parse(qaResultJson); } catch (_) {}
-                const qaOk = parsed && (parsed.ok === true || parsed.exitCode === 0);
-                qaResultSummary = {
-                  ok: !!qaOk,
-                  exitCode: parsed?.exitCode ?? null,
-                  command: qaCommand,
-                };
-                send({ type: 'tool_result', name: 'autonomous_qa_gate', result: qaResultJson });
-
-                if (qaOk) {
-                  // QA passed — try deploy gate, then finalize.
-                  const deployFailed = await tryDeployGate();
-                  if (deployFailed) {
-                    // keep continueLoop = true
-                  } else if (await tryStopHookGate()) {
-                    // keep continueLoop = true
-                  } else {
-                    send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
-                      reasoning: sawReasoning ? { durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
-                    });
-                    continueLoop = false;
-                  }
-                } else {
-                  // Fail — feed the result back and keep looping.
-                  allMessages.push({ role: 'assistant', content: assistantText });
-                  allMessages.push({ role: 'user', content: '[System: The QA gate `' + qaCommand + '` FAILED. Output:\n\n' + (qaResultJson || '(no output)').slice(0, 4000) + '\n\nDo NOT emit DONE: until QA passes. Diagnose the failure, fix it, and re-run the work. If the failure is environmental and out of scope, use BLOCKED: with a precise reason.]' });
-                  // keep continueLoop = true
-                }
-              } catch (qaErr) {
-                console.warn('[chat] autonomous QA gate threw:', qaErr?.message || qaErr);
-                qaResultSummary = { ok: false, error: qaErr?.message || String(qaErr), command: qaCommand };
-                send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
-                  reasoning: sawReasoning ? { durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
-                });
-                continueLoop = false;
-              }
             } else if (autonomousMode && finalMarker === 'DONE' && deployCommand && !deployRan) {
               // DONE: with no QA configured but a deploy gate exists.
               const deployFailed = await tryDeployGate();
@@ -4014,6 +4143,13 @@ export function registerChatRoute(app, {
             } else if (autonomousMode && finalMarker === 'DONE' && await tryStopHookGate()) {
               // keep continueLoop = true
             } else {
+              if (!autonomousMode && browserVerificationRequired) {
+                send({ type: 'task_result',
+                  status: completionRequested && passedBrowserVerification(browserVerification) ? 'DONE' : 'BLOCKED',
+                  content: assistantText,
+                  verification: { ...(qaResultSummary || {}), browser: browserVerification },
+                });
+              }
               send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
                 reasoning: sawReasoning ? { durationSeconds: reasoningStart ? Math.round((Date.now() - reasoningStart) / 1000) : null } : null
               });
@@ -4026,6 +4162,8 @@ export function registerChatRoute(app, {
             // affect the user-visible response.
             if (autonomousMode && !continueLoop) {
               const finalStatus = finalMarker || 'UNMARKED';
+              send({ type: 'task_result', status: finalStatus, content: assistantText,
+                verification: browserVerificationRequired ? { ...(qaResultSummary || {}), browser: browserVerification } : qaResultSummary });
               try {
                 appendAutonomousRunLog(projectId, {
                   convId: req.body?.conversationId || null,
@@ -4159,8 +4297,22 @@ export function registerChatRoute(app, {
         }
       }
       // ── Trace: loop completed normally ───────────────────────────────
+      if (browserVerificationRequired && !passedBrowserVerification(browserVerification) && !upstreamAbort.signal.aborted) {
+        const error = browserVerification?.error || qaResultSummary?.browser?.error
+          || 'Mandatory post-edit in-app browser journey is unverified';
+        send({ type: 'task_result', status: 'BLOCKED', content: error,
+          verification: { ...(qaResultSummary || {}), ok: false, browser: browserVerification || { ok: false, error } },
+        });
+      }
       if (_traceLedgerFile) tracer.done({ totalTurns: turnUsage.iterations, totalTools: toolCallCount, durationMs: Date.now() - autonomousStartedAt });
-      if (durableRunId && runStore && !requiresUserActionThisTurn) runStore.setStatus(durableRunId, 'completed', { totalTurns: turnUsage.iterations, totalTools: toolCallCount });
+      if (durableRunId && runStore && !requiresUserActionThisTurn) {
+        const verification = browserVerificationRequired
+          ? { ...(qaResultSummary || {}), browser: browserVerification,
+            ok: qaResultSummary?.ok !== false && passedBrowserVerification(browserVerification) }
+          : qaResultSummary;
+        runStore.setStatus(durableRunId, verification?.ok === false ? 'failed' : 'completed',
+          { totalTurns: turnUsage.iterations, totalTools: toolCallCount, verification });
+      }
     } catch (err) {
       // Suppress noise from intentional aborts (Stop button / client disconnect).      // Only treat as abort if we actually aborted the controller — checking the
       // error message text alone is too loose and swallows real upstream errors
@@ -4171,8 +4323,8 @@ export function registerChatRoute(app, {
         if (durableRunId && runStore) runStore.setStatus(durableRunId, 'cancelled', { totalTools: toolCallCount });
       } else {
         try { send({ type: 'error', error: err.message }); } catch (_) {}
-        if (_traceLedgerFile) tracer.error({ message: err.message, totalTools: toolCallCount, durationMs: Date.now() - autonomousStartedAt });
-        if (durableRunId && runStore) runStore.setStatus(durableRunId, 'failed', { error: err.message, totalTools: toolCallCount });
+        send({ type: 'task_result', status: 'BLOCKED', content: 'Execution failed: ' + err.message });
+        if (durableRunId && runStore) runStore.setStatus(durableRunId, 'failed', { error: err.message });
       }
     } finally {
       if (subagentStarted && subagentStopPayload) {

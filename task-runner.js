@@ -16,6 +16,7 @@ import { recordRoutingOutcomesForRun } from './lib/routing-evidence.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { isUiChange, passedBrowserVerification } from './lib/browser-verification.js';
 
 const PORT = 3737;
 const _runningTasks = new Map(); // taskId → { abortController, step, startedAt }
@@ -224,6 +225,7 @@ async function _autonomyLoop(task, state) {
     toolGuidance.push('You CANNOT use shell commands for this task — shell access is disabled.');
   }
   if (perms.browser) {
+    toolGuidance.push('UI coding changes MUST be verified through native fauna_browser action:"verify" in the IN-APP browser after the latest edit. Supply the affected URL and relevant ordered click/type steps followed by exact DOM assertions (count/text/value/visible). It checks console errors. Screenshots, navigation alone, browser-ext-action and external Playwright cannot satisfy this completion gate. Use BLOCKED: if the native renderer or browser permission is unavailable.');
     toolGuidance.push('You have TWO browser paths — use the right one:\n\n' +
       '**1. Internal browser panel** (`browser-action` blocks) — for LOCAL dev servers (localhost / 127.0.0.1 / file://). Opens visibly in the Fauna UI so the user can watch. No extension required. Use this for:\n' +
       '   - Debugging and auditing a dev server you just built or started\n' +
@@ -331,6 +333,11 @@ async function _autonomyLoop(task, state) {
       autonomousMode: true,
       acceptanceCriteria: task.acceptanceCriteria || '',
       qa: task.qa || null,
+      taskCwd: typeof perms.shell === 'object' ? perms.shell.cwd : null,
+      shellEnabled: perms.shell !== false,
+      browserEnabled: !!perms.browser,
+      workItemId: task.kanban?.cardId || null,
+      requireBrowserVerification: isUiChange(task.title + '\n' + (task.description || '') + '\n' + (task.acceptanceCriteria || '')),
       thinkingBudget: 'medium',
       maxContextTurns: 100,
       // Headless run — tells /api/chat to use the relaxed tool-guard caps
@@ -417,7 +424,7 @@ async function _autonomyLoop(task, state) {
       _emit(task.id, 'reasoning', { entry: reasoningEntry });
       _persistPartial(task.id, state);
 
-      const completionMatch = aiResponse.match(/(?:TASK_COMPLETE|DONE)\s*:?\s*([\s\S]*)/i);
+      const completionMatch = aiResponse.match(/^\s*(?:TASK_COMPLETE|DONE)\s*:?\s*([\s\S]*)/i);
       if (completionMatch) {
         const summary = (completionMatch[1] || '').trim() || 'Task completed successfully';
         // Anti-rationalization gate: if the task has bound skills, force
@@ -535,6 +542,26 @@ function _pickAgent(task, step) {
 // assembled assistant text once the stream ends.
 async function _callChat(params, signal, onDelta) {
   try {
+    let finalResult = null;
+    const accumulate = (line, content) => {
+      if (line.startsWith('data: ')) {
+        try {
+          const event = JSON.parse(line.slice(6));
+          if (event.type === 'task_result') {
+            finalResult = event;
+            if (params.runId) updateTask(params.runId, { verification: event.verification || null });
+          }
+        } catch (_) {}
+      }
+      return _accumulateSseLine(line, content);
+    };
+    const finalize = content => {
+      if (params.requireBrowserVerification && (!finalResult || finalResult.status !== 'DONE'
+        || !passedBrowserVerification(finalResult.verification?.browser))) {
+        return 'TASK_FAILED: Mandatory in-app browser verification failed or is unavailable';
+      }
+      return finalResult ? _accumulateSseLine('data: ' + JSON.stringify(finalResult), '') : content || null;
+    };
     const resp = await fetch(`http://localhost:${PORT}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -548,7 +575,9 @@ async function _callChat(params, signal, onDelta) {
     // (e.g. mocked in tests). This keeps test fixtures working.
     if (!resp.body || typeof resp.body.getReader !== 'function') {
       const text = await resp.text();
-      return _parseSseToContent(text);
+      let content = '';
+      for (const line of text.split('\n')) content = accumulate(line, content);
+      return finalize(content);
     }
 
     const reader = resp.body.getReader();
@@ -566,7 +595,7 @@ async function _callChat(params, signal, onDelta) {
       while ((nlIdx = buffer.indexOf('\n')) !== -1) {
         const line = buffer.slice(0, nlIdx);
         buffer = buffer.slice(nlIdx + 1);
-        const next = _accumulateSseLine(line, content);
+        const next = accumulate(line, content);
         if (next !== content) {
           content = next;
           if (typeof onDelta === 'function') {
@@ -581,14 +610,14 @@ async function _callChat(params, signal, onDelta) {
     }
     // Flush any trailing partial line.
     if (buffer) {
-      content = _accumulateSseLine(buffer, content);
+      content = accumulate(buffer, content);
     }
     // Final flush so the consumer sees the tail even if it falls inside
     // the throttle window.
     if (typeof onDelta === 'function' && content) {
       try { onDelta(content); } catch (_) {}
     }
-    return content || null;
+    return finalize(content);
   } catch (err) {
     if (err.name === 'AbortError') return null;
     console.error('[task-runner] Chat call failed:', err.message);
@@ -603,6 +632,12 @@ function _accumulateSseLine(line, content) {
   try {
     const evt = JSON.parse(line.slice(6));
     if (evt.type === 'content' && evt.content) return content + evt.content;
+    // The chat route can reject an earlier DONE and retry. Only its final
+    // decision is authoritative; streamed narration may contain stale markers.
+    if (evt.type === 'task_result') {
+      return evt.status === 'DONE' && evt.verification?.ok !== false && evt.verification?.browser?.ok !== false
+        ? evt.content : 'TASK_FAILED: ' + String(evt.content || evt.status).replace(/(?:TASK_COMPLETE|DONE)\s*:/gi, '');
+    }
     if (evt.type === 'error') {
       console.error('[task-runner] API error in stream:', evt.error);
     }

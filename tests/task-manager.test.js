@@ -44,6 +44,15 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+it('persists task acceptance criteria and QA for Kanban loopback verification', () => {
+  const task = tm.createTask({
+    title: 'Fix code', acceptanceCriteria: 'Tests pass', qa: { command: 'npm test' },
+  });
+  expect(readTasks().find(item => item.id === task.id)).toMatchObject({
+    acceptanceCriteria: 'Tests pass', qa: { command: 'npm test' },
+  });
+});
+
 // ── PR4.1 — INTERVAL math ───────────────────────────────────────────────
 describe('PR4.1 rruleMatchesNow honours INTERVAL', () => {
   it('INTERVAL=2 HOURLY: blocks within 1 period of lastRunAt', () => {
