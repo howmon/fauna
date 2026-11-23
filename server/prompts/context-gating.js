@@ -16,7 +16,7 @@ const VISUALIZER_KW = /\b(?:(?:radar|spider|scatter|bubble)(?:[- ]?(?:chart|grap
 
 const BROWSER_KW = /\b(browser|navigate|tab\b|open .* url|fetch .* page|crawl|scrape|click|fill .* form|type into|screenshot|snapshot|dev[- ]?server|localhost|https?:\/\/|extension|playwright|extract page)/i;
 
-const FRONTEND_KW = /\b(ui|ux|frontend|front[- ]?end|website|landing page|hero section|component library|css|tailwind|react|next\.?js|svelte|vue|design system|figma|typography|color palette|gradient|hover state|animation|motion|micro[- ]?interaction|responsive|mobile view|landing|portfolio site|case stud)/i;
+const FRONTEND_KW = /\b(ui|ux|frontend|front[- ]?end|web[- ]?(?:site|page|app)|dashboard|mobile app|app (?:screen|interface)|landing page|hero section|component library|css|tailwind|react|next\.?js|svelte|vue|design system|figma|typography|color palette|gradient|hover state|animation|motion|micro[- ]?interaction|responsive|mobile view|landing|portfolio site|case stud)/i;
 
 // Did the assistant already render any of these in this conversation? Once
 // yes, keep injecting — switching modes mid-thread would confuse the model

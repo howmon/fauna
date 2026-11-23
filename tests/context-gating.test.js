@@ -16,6 +16,22 @@ function withUserText(text) {
   });
 }
 
+describe('frontend quality routing', () => {
+  it.each([
+    'Design a web app for booking music lessons.',
+    'Build an inventory dashboard.',
+    'Create a webpage for a local bakery.',
+  ])('includes frontend guidance for %s', text => {
+    expect(computeContextFlags({ messages: [{ role: 'user', content: text }] }).frontend).toBe(true);
+  });
+
+  it('does not add frontend guidance to backend work', () => {
+    expect(computeContextFlags({
+      messages: [{ role: 'user', content: 'Fix the database connection pool.' }],
+    }).frontend).toBe(false);
+  });
+});
+
 describe('visualizer request routing', () => {
   it.each([
     'Can you show a visual for the target vulnerability radar?',

@@ -150,6 +150,21 @@ describe('POST /api/chat lifecycle hooks', () => {
       { action: 'assert', selector: '#outcome', property: 'text', expected: 'After' }],
   };
 
+  it('supplies brief-led frontend guidance for a plain web app design request', async () => {
+    mockTextStream('I will center the lesson search and booking workflow.');
+    await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'Design a web app for booking music lessons.' }] },
+    });
+
+    const params = llm.create.mock.calls.find(([value]) => value.stream)?.[0];
+    const system = params.messages.filter(message => message.role === 'system')
+      .map(message => message.content).join('\n');
+    expect(system).toContain('### Frontend Quality Bar');
+    expect(system).toContain('A palette swap is not a new design');
+    expect(system).toContain('preserve the established patterns');
+    expect(system).not.toContain('Avoid flat single-color backgrounds');
+  });
+
   it.each(['before-stream', 'during-stream'])('cleans up cancellation %s without an uncaught scope error', async phase => {
     vi.spyOn(os, 'homedir').mockReturnValue(workspaceRoot);
     const runStore = createRunStore({ configDir: workspaceRoot });

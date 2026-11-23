@@ -24,6 +24,7 @@ describe('buildProjectDesignContext()', () => {
     expect(context).toContain('Fidelity: high (pixel-ready)');
     expect(context).toContain('fauna_design_audit');
     expect(context).toContain('at most two visual audit passes');
+    expect(context).toContain('Do not ask the user to choose a direction again');
   });
 
   it('does not force design mode for projects with brand preferences only', () => {
@@ -41,6 +42,14 @@ describe('buildProjectDesignContext()', () => {
 });
 
 describe('composeDesignPrompt()', () => {
+  it('allows a brief-led direction without forcing every project through the same presets', () => {
+    const context = composeDesignPrompt({ projectName: 'Music lesson booking' });
+
+    expect(context).toContain('not an exhaustive menu');
+    expect(context).toContain('workflow and information hierarchy');
+    expect(context).not.toContain('offering the 5 visual directions before writing any design output');
+  });
+
   it('rejects traversal-like catalog identifiers', () => {
     const context = composeDesignPrompt({
       skillId: '../../private',

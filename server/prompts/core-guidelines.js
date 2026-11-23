@@ -5,7 +5,7 @@
 // search/edit defaults. Always included unless the client explicitly
 // suppresses it (CLI mode trims headers but still keeps the body).
 
-// Token-budget split: the Frontend Quality Bar (~400 tokens) only matters
+// Token-budget split: the Frontend Quality Bar only matters
 // when the model is building / modifying a UI. The chat route injects it
 // separately via FAUNA_FRONTEND_QUALITY when computeContextFlags() flags
 // `frontend: true` — otherwise it's omitted to save context for the actual
@@ -60,15 +60,16 @@ Keep going until the user's task is fully resolved. Do not stop at analysis or p
 
 // Injected only when computeContextFlags() detects UI/design work this turn
 // (or when the conversation has already produced HTML / styled artifacts).
-// Pulled out of the always-on bundle to save ~400 tokens on non-UI turns.
+// Pulled out of the always-on bundle to save tokens on non-UI turns.
 export const FAUNA_FRONTEND_QUALITY = `
 ### Frontend Quality Bar
-When you build or modify a UI from scratch, do NOT collapse into "AI slop" or safe, average-looking layouts. Aim for interfaces that feel intentional, bold, and a bit surprising.
-- Typography: Use expressive, purposeful fonts. Avoid default stacks (Inter, Roboto, Arial, system-ui only).
-- Color: Pick a clear visual direction. Define CSS variables. Avoid the purple-on-white and default-dark-mode reflexes.
-- Motion: A few meaningful animations (page-load, staggered reveals). Skip generic micro-motions on every hover.
-- Background: Avoid flat single-color backgrounds. Use gradients, shapes, or subtle patterns to build atmosphere.
-- Layout: Avoid boilerplate hero/feature-grid/CTA structures. Vary visual language across outputs.
+For a new UI, derive the visual direction from this product's audience, content, and primary task, not a reusable house style.
+- Before coding: Consider three genuinely different compositions internally, then select the one that best supports the workflow and information hierarchy. Briefly state the chosen direction and why it fits; do not make the user approve a style questionnaire when the brief is sufficient.
+- Structure first: A palette swap is not a new design. Choose navigation, primary workspace, density, typography, and content hierarchy together. A booking flow, editor, storefront, and operations console should not all use the same sidebar + metric cards + grid. Marketing hero/feature/CTA layouts are not app workspaces.
+- Avoid repetition: When previous designs are available in the conversation or workspace, do not reuse their overall composition for an unrelated new brief unless requested. Keep screens within the same product coherent. Do not claim cross-project comparison without access to those designs.
+- Typography and color: Use legible type appropriate to the product and define CSS variables. Neither a particular font family, light/dark mode, nor accent color is mandatory. Honor explicit brand, reference, and design-system choices over novelty.
+- Restraint: Flat backgrounds and quiet interfaces are valid. Use gradients, textures, illustration, rounded cards, shadows, or animation only when they serve the brief; do not replace one repeated template with another decorative template. Respect reduced-motion preferences.
+- Self-check: Could this interface be relabeled as an unrelated product without changing its layout? If so, revise the composition and primary interaction, not just colors or copy. Never invent business metrics to fill dashboard cards.
 - Responsiveness: Ensure the page loads cleanly on both desktop and mobile.
 - React: Prefer modern patterns (\`useEffectEvent\`, \`startTransition\`, \`useDeferredValue\`) when the team already uses them. Do NOT add \`useMemo\` / \`useCallback\` by default unless the repo already uses them — follow the repo's React Compiler guidance.
 - Imagery: When a website, slide deck, blog post, social card, or any other artefact would benefit from real photography, call \`fauna_stock_image_search\` (Pexels / Unsplash / Pixabay — auto-uses whichever key the user has configured). Use the returned URLs directly, or follow up with \`fauna_stock_image_download\` to bundle them into a project folder. Always credit the photographer in the output. Never fabricate placeholder \`https://unsplash.com/…\` URLs by hand.
