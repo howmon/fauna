@@ -15,9 +15,15 @@ function setup() {
     expanded: { nested: true }, openedFiles: { 'nested/old.txt': true },
   };
   const el = { scrollTop: 72 };
+  const windowEvents = new EventTarget();
   const context = {
     state: { activeProjectId: 'p', projSidebarPanelOpen: true }, _projSidebarTreeState: st,
-    window: { EventSource, faunaStreamUrl: url => url + '?auth=fixture' }, EventSource,
+    window: {
+      EventSource, faunaStreamUrl: url => url + '?auth=fixture',
+      addEventListener: windowEvents.addEventListener.bind(windowEvents),
+      removeEventListener: windowEvents.removeEventListener.bind(windowEvents),
+      dispatchEvent: windowEvents.dispatchEvent.bind(windowEvents),
+    }, EventSource,
     AbortController, setTimeout, clearTimeout, console: { warn: vi.fn() },
     fetch: vi.fn(async () => ({ ok: true, json: async () => [{ name: 'new.txt' }] })),
     _treeGetEl: () => el, _treeRender: vi.fn(() => { el.scrollTop = 0; }), _showToast: vi.fn(),
@@ -31,6 +37,22 @@ function setup() {
 afterEach(() => vi.useRealTimers());
 
 describe('live project sidebar', () => {
+  it('recovers missed events on focus, coalesces refreshes, and removes the listener on close', async () => {
+    vi.useFakeTimers();
+    const { context, st } = setup();
+    const expanded = st.expanded;
+    context.window.dispatchEvent(new Event('focus'));
+    context.window.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(context.fetch).toHaveBeenCalledTimes(2);
+    expect(st.dirCache.nested).toEqual([{ name: 'new.txt' }]);
+    expect(st.expanded).toBe(expanded);
+    context._projSpStopAutoRefresh();
+    context.window.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(context.fetch).toHaveBeenCalledTimes(2);
+  });
+
   it('refreshes only affected listings and preserves expansion, opened files, and scroll', async () => {
     vi.useFakeTimers();
     const { context, st, el, streams } = setup();

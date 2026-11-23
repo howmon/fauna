@@ -79,8 +79,13 @@ describe('project file notifications', () => {
     const watchSpy = vi.spyOn(fs, 'watch');
     const controller = new AbortController();
     cleanups.push(() => controller.abort());
-    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/projects/p/sources/s/events`, { signal: controller.signal });
+    const origin = `http://localhost:${server.address().port}`;
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/projects/p/sources/s/events`, {
+      headers: { Origin: origin }, signal: controller.signal,
+    });
     expect(response.headers.get('content-type')).toContain('text/event-stream');
+    expect(response.headers.get('access-control-allow-origin')).toBe(origin);
+    expect(response.headers.get('vary')).toBe('Origin');
     expect(resolveRoot).toHaveBeenCalledWith('p', 's');
     const watcher = watchSpy.mock.results[0].value;
     const closeSpy = vi.spyOn(watcher, 'close');
@@ -123,6 +128,32 @@ describe('project file notifications', () => {
     await vi.waitFor(() => expect(closeSpy).toHaveBeenCalled());
   });
 
+  it('allows only loopback page origins for cross-origin file streams', async () => {
+    mockWatcher();
+    const app = express();
+    registerProjectRoutes(app, { resolveProjectSourceRoot: () => ({ root: '/tmp/fauna-watch-cors' }) });
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise(resolve => server.once('listening', resolve));
+    cleanups.push(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
+    for (const [origin, allowed] of [
+      ['http://localhost:3737', true],
+      ['https://127.0.0.1:3737', true],
+      ['http://localhost.evil.test:3737', false],
+      ['https://example.com', false],
+      ['null', false],
+      [undefined, false],
+    ]) {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/api/projects/p/sources/s/events`, {
+        headers: origin ? { Origin: origin } : {},
+      });
+      try {
+        expect(response.headers.get('access-control-allow-origin')).toBe(allowed ? origin : null);
+      } finally {
+        await response.body.cancel();
+      }
+    }
+  });
+
   it('returns an explicit error when the project source cannot be resolved', async () => {
     const handlers = new Map();
     const app = Object.fromEntries(['get', 'post', 'put', 'patch', 'delete'].map(method =>
@@ -130,7 +161,7 @@ describe('project file notifications', () => {
     registerProjectRoutes(app, { resolveProjectSourceRoot() { throw new Error('Source not found'); } });
     const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    handlers.get('get /api/projects/:id/sources/:srcId/events')({ params: { id: 'p', srcId: 'missing' } }, res);
+    handlers.get('get /api/projects/:id/sources/:srcId/events')({ headers: {}, params: { id: 'p', srcId: 'missing' } }, res);
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({ error: 'Source not found' });
   });

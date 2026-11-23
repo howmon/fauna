@@ -269,6 +269,11 @@ export function registerProjectRoutes(app, deps) {
   });
 
   app.get('/api/projects/:id/sources/:srcId/events', (req, res) => {
+    const origin = req.headers.origin;
+    if (origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+    }
     let unsubscribe;
     let heartbeat;
     const cleanup = () => {

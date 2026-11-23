@@ -835,6 +835,7 @@ var _projSpFileWatch = null;
 function _projSpStopAutoRefresh() {
   if (!_projSpFileWatch) return;
   _projSpFileWatch.source.close();
+  window.removeEventListener('focus', _projSpFileWatch.onFocus);
   clearTimeout(_projSpFileWatch.timer);
   if (_projSpFileWatch.request) _projSpFileWatch.request.abort();
   _projSpFileWatch = null;
@@ -852,6 +853,13 @@ function _projSpStartAutoRefresh() {
   };
   watch.source = new EventSource(window.faunaStreamUrl ? window.faunaStreamUrl(url) : url);
   _projSpFileWatch = watch;
+  // Recover missed filesystem notifications when returning from external tools.
+  watch.onFocus = function() {
+    if (_projSpFileWatch !== watch) return;
+    watch.reset = true;
+    _projSpQueueRefresh(watch);
+  };
+  window.addEventListener('focus', watch.onFocus);
   watch.source.onmessage = function(event) {
     if (_projSpFileWatch !== watch) return;
     try {
