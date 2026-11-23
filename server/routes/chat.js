@@ -74,7 +74,7 @@ import { ChatTracer } from '../../lib/run-ledger.js';
 import { buildDesignTaskContext } from '../../design-prompts.js';
 import { formatImageAssetContext, persistConversationImageAssets } from '../lib/attachment-assets.js';
 import { projectCapabilities } from '../lib/capability-projection.js';
-import { detectAutoVerifyCommand, resolveVerificationRoot, validationCommandKeys } from '../../lib/verification-command.js';
+import { detectAutoVerifyCommand, resolveBrowserExtensionRoot, resolveVerificationRoot, validationCommandKeys } from '../../lib/verification-command.js';
 import { buildTaskRequirements, TASK_FIDELITY_RULES } from '../lib/task-requirements.js';
 import { isUiChange, passedBrowserVerification } from '../../lib/browser-verification.js';
 
@@ -2324,6 +2324,8 @@ export function registerChatRoute(app, {
       let narrationRepeats = 0;    // consecutive iterations with near-identical preamble
       let narrationNudgeFired = false; // only inject the coaching nudge once per request
       let toolsLockedForFinalResponse = false;
+      let finalResponseStopReason = '';
+      let mutationRecoveryAttempted = false;
       // Template-signature repeat detector — runs alongside narrationRepeats and
       // catches the failure mode where preambles share an obvious canned shape
       // (e.g. "I've now confirmed … The hypothesis I'm testing … The specific
@@ -2488,12 +2490,24 @@ export function registerChatRoute(app, {
       // so the inspection-only and declared-work-without-mutation guards catch build-artifact
       // requests like "rewrite as a 30-page docx" that used to slip past the original verb list
       // (transcript: fauna-30-Page-Strategy-Report-Rewrite).
-      const _writeIntentTurn = /\b(?:fix|fixes|fixed|implement|resolve|repair|patch|update|change|modify|edit|write|create|add|remove|delete|hide|replace|refactor|migrate|install|extract|port|integrate|copy|move|bring|build\s+out|make\s+(?:all|the|this)|proceed|rewrite|rebuild|regenerate|generate|scaffold|produce|draft|assemble|compose|render(?:\s+out)?)\b/i.test(
+      const _writeIntentTurn = /\b(?:fix|fixes|fixed|implement|(?:finish|complete)\s+(?:[\w-]+\s+){0,8}implementation|resolve|repair|patch|update|change|modify|edit|write|create|add|remove|delete|hide|replace|refactor|migrate|install|extract|port|integrate|copy|move|bring|build\s+out|make\s+(?:all|the|this)|proceed|rewrite|rebuild|regenerate|generate|scaffold|produce|draft|assemble|compose|render(?:\s+out)?)\b/i.test(
         (!isolateContext && !isDelegation ? taskRequirements.intent : _lastUserQuery) || '',
       );
-      let browserVerificationRequired = req.body?.requireBrowserVerification === true
-        || ((_writeIntentTurn || autonomousMode) && isUiChange(_lastUserQuery));
+      let uiChangeDetected = (_writeIntentTurn || autonomousMode) && isUiChange(_lastUserQuery);
+      let browserVerificationForced = req.body?.requireBrowserVerification === true
+        || (uiChangeDetected && /\b(?:e2e|end.to.end|live (?:browser|extension|ui)|in.app browser)\b/i.test(_lastUserQuery));
+      let extensionRoot = null;
+      let browserVerificationRequired = false;
       let browserVerification = null;
+      const updateBrowserRequirement = () => {
+        const previousRoot = extensionRoot;
+        extensionRoot = resolveBrowserExtensionRoot(verificationProjectRoot, [...changedVerificationFiles]);
+        browserVerificationRequired = browserVerificationForced || (uiChangeDetected && !extensionRoot);
+        if (extensionRoot && extensionRoot !== previousRoot && uiChangeDetected) {
+          allMessages.push({ role: 'system', content: '[Verification scope: browser extension] The affected package has a Chrome/Firefox extension manifest. Its privileged extension UI is not a normal in-app browser URL. Implement the change and run the relevant extension tests and build. Live extension E2E remains unverified unless an extension-capable integration test actually exercises it. State that limitation in the final answer; never describe passing unit tests/builds as live UI proof. Explicitly requested live browser verification is still required.' });
+        }
+      };
+      updateBrowserRequirement();
       const persistBrowserVerification = () => {
         if (projectId && workItemId && browserVerificationRequired) {
           setWorkItemBrowserVerification(projectId, workItemId, browserVerification
@@ -3157,7 +3171,14 @@ export function registerChatRoute(app, {
         // ── Trace: model response received ──────────────────────────────
         _traceModelResponse(turnUsage.iterations, finishReason, streamUsage);
 
-        if (finishReason === 'tool_calls' && pendingCalls.length > 0) {
+        if (toolsLockedForFinalResponse) {
+          const error = finalResponseStopReason || 'Execution stopped after repeated tool calls without progress.';
+          qaResultSummary = { ...(qaResultSummary || {}), ok: false, error };
+          send({ type: 'task_result', status: requiresUserActionThisTurn ? 'NEEDS-INPUT' : 'BLOCKED',
+            content: assistantText.trim() || error, verification: qaResultSummary });
+          send({ type: 'done', finish_reason: requiresUserActionThisTurn ? 'awaiting_user_action' : 'loop_stopped' });
+          continueLoop = false;
+        } else if (finishReason === 'tool_calls' && pendingCalls.length > 0) {
           const calls = pendingCalls.filter(tc => tc && tc.function?.name);
           if (!calls.length) { send({ type: 'done', finish_reason: finishReason }); continueLoop = false; break; }
           // Include the streamed preamble in the assistant turn so the model can
@@ -3430,7 +3451,7 @@ export function registerChatRoute(app, {
                   if (!files.length || files.some(file => !/\.(?:md|txt|rst|adoc)$/i.test(
                     typeof file === 'string' ? file : file.path || '',
                   ))) {
-                    browserVerificationRequired ||= isUiChange('', files);
+                    uiChangeDetected ||= isUiChange('', files);
                     browserVerification = null;
                     persistBrowserVerification();
                     for (const file of files) {
@@ -3438,13 +3459,14 @@ export function registerChatRoute(app, {
                       if (name) changedVerificationFiles.add(path.resolve(args?.cwd || verificationProjectRoot, name));
                     }
                     verificationCwd = resolveVerificationRoot(verificationProjectRoot, [...changedVerificationFiles]);
+                    updateBrowserRequirement();
                     invalidateVerification();
                   }
                 }
                 if (VALIDATION_TOOLS.has(toolName)) validationToolUsed = true;
                 if (toolName === 'fauna_shell_exec') {
                   if (!_isReadOnlyShellCommand(args?.command)) {
-                    browserVerificationRequired ||= isUiChange(args?.command, [args?.command || '']);
+                    uiChangeDetected ||= isUiChange(args?.command, [args?.command || '']);
                     browserVerification = null;
                     persistBrowserVerification();
                     mutatingToolUsed = true;
@@ -3453,6 +3475,7 @@ export function registerChatRoute(app, {
                       const commandCwd = commandWorkingDirectory(args?.command, args?.cwd || verificationProjectRoot);
                       verificationCwd = resolveVerificationRoot(verificationProjectRoot, [commandCwd]);
                     }
+                    updateBrowserRequirement();
                     invalidateVerification();
                   }
                   if (_isValidationShellCommand(args?.command)) validationToolUsed = true;
@@ -3662,6 +3685,7 @@ export function registerChatRoute(app, {
           await _flushParallel();
           if (requiresUserActionThisTurn) {
             toolsLockedForFinalResponse = true;
+            finalResponseStopReason = 'Execution is paused for the user decision.';
             allMessages.push({
               role: 'user',
               content: '[System: A tool produced an interactive authentication prompt. Stop all tools and authentication retries now. Briefly tell the user Fauna is paused for their decision in the composer and end the response. Never suggest or retry `cowork auth login --device-code`. Do not poll, restart login, create another terminal, or claim you will continue automatically. The next real user response will resume the workflow.]',
@@ -3678,10 +3702,24 @@ export function registerChatRoute(app, {
           } else {
             silentBursts = 0;
           }
-          if (continueLoop && silentBursts >= 7) {
+          const recoveryTool = !requiresUserActionThisTurn && _writeIntentTurn && !mutatingToolUsed
+            && !mutationRecoveryAttempted && llmSupports.tools
+            && (silentBursts >= 4 || narrationRepeats >= 2 || templateRepeats >= 2)
+            ? ['fauna_apply_patch', 'fauna_write_file'].find(name =>
+                mcpTools?.some(tool => tool.function?.name === name)) : null;
+          if (recoveryTool) {
+            mutationRecoveryAttempted = true;
+            forceToolChoice = recoveryTool;
+            silentBursts = 0;
+            narrationRepeats = 0;
+            templateRepeats = 0;
+            console.log('[chat] inspection loop detected — forcing one concrete mutation attempt');
+            allMessages.push({ role: 'user', content: '[System: You have repeatedly inspected files without implementing the requested change. Editing tools are still available. Apply the smallest safe change now using the selected mutation tool and the source you already read, then run focused validation. Do not repeat the investigation or claim that tools are unavailable.]' });
+          } else if (continueLoop && silentBursts >= 7) {
             console.log('[chat] silent-burst guard tripped at ' + silentBursts + ' silent iterations — stopping loop');
             allMessages.push({ role: 'user', content: '[System: You have run ' + (silentBursts + 1) + ' tool-call rounds in a row without producing any visible response. Stop calling tools NOW. Give the user a brief honest prose summary of what you investigated, what you found, what (if anything) you fixed, and the next concrete step. If the gen-ui catalog is loaded, finish with one compact completion card reflecting the same verified status. Do not make more tool calls.]' });
             toolsLockedForFinalResponse = true;
+            finalResponseStopReason = 'Execution stopped after repeated silent tool rounds without a result.';
           } else if (continueLoop && !silentBurstNudgeFired && silentBursts >= 4) {
             silentBurstNudgeFired = true;
             console.log('[chat] silent-burst guard — injecting status-update nudge at ' + silentBursts + ' silent iterations');
@@ -3696,24 +3734,26 @@ export function registerChatRoute(app, {
           // itself. Inject a coaching message once, then hard-stop if it keeps
           // happening — better to surface what was attempted than to spam the
           // user with eight identical preambles.
-          if (continueLoop && narrationRepeats >= 4) {
+          if (!recoveryTool && continueLoop && narrationRepeats >= 4) {
             console.log('[chat] narration-repetition guard tripped — stopping loop');
             allMessages.push({ role: 'user', content: '[System: You have repeated the same explanation ' + (narrationRepeats + 1) + ' times without making progress. Stop calling tools. Give the user a brief honest summary of what you tried, what failed, and one concrete alternative they could try (e.g., a manual step, a different site, or supplying credentials).]' });
             toolsLockedForFinalResponse = true;
+            finalResponseStopReason = 'Execution stopped after repeated narration without progress.';
             // Let the next iteration produce a final answer, but no more tools.
             // We do that by appending and continuing — the model will see the
             // directive and (typically) emit text only.
-          } else if (continueLoop && !narrationNudgeFired && narrationRepeats >= 2) {
+          } else if (!recoveryTool && continueLoop && !narrationNudgeFired && narrationRepeats >= 2) {
             narrationNudgeFired = true;
             console.log('[chat] narration-repetition guard — injecting coaching nudge');
             allMessages.push({ role: 'user', content: '[System: You are repeating the same explanation each turn without making progress. Do NOT narrate the same plan again. Either (a) take a materially different action — different tool, different site, different approach — or (b) stop and give the user a final summary of what was tried and what they can do next.]' });
-          } else if (continueLoop && templateRepeats >= 3) {
+          } else if (!recoveryTool && continueLoop && templateRepeats >= 3) {
             // Hard stop on the canned-template loop — at 3 consecutive
             // templated preambles we know the user is about to get spammed.
             console.log('[chat] template-repetition guard tripped at ' + templateRepeats + ' templated preambles — stopping loop');
             allMessages.push({ role: 'user', content: '[System: You have produced the same canned three-part status update on ' + (templateRepeats + 1) + ' consecutive turns without delivering an artifact. Stop. Skip the "I have confirmed / hypothesis / next action" prose entirely and either (a) call the tool that produces the actual deliverable the user asked for, or (b) emit the final answer/file/summary in this turn. No more status updates.]' });
             toolsLockedForFinalResponse = true;
-          } else if (continueLoop && !templateNudgeFired && templateRepeats >= 2) {
+            finalResponseStopReason = 'Execution stopped after repeated status updates without a deliverable.';
+          } else if (!recoveryTool && continueLoop && !templateNudgeFired && templateRepeats >= 2) {
             templateNudgeFired = true;
             console.log('[chat] template-repetition guard — injecting break-template nudge at ' + templateRepeats + ' templated preambles');
             allMessages.push({ role: 'user', content: '[System: Your last two preambles share the same template ("I have confirmed … / hypothesis / next action"). The user does not want a status report on every turn. Drop the template. Either call the next tool with NO preamble at all, or produce the actual deliverable now. If the original task requires creating files, create them this turn.]' });
@@ -3730,6 +3770,7 @@ export function registerChatRoute(app, {
         } else {
           const completionRequested = !/^\s*(?:TASK_FAILED|BLOCKED|NEEDS-INPUT)\s*:/i.test(assistantText || '');
           if (codeMutationUsed && _claimsVerifiedBrowserOutcome(assistantText)) {
+            browserVerificationForced = true;
             browserVerificationRequired = true;
             persistBrowserVerification();
           }
@@ -3822,6 +3863,7 @@ export function registerChatRoute(app, {
                 cwd: checkCwd, timedOut: parsed.timedOut === true,
                 reused: reuseCheck,
                 output: result.slice(0, 8000),
+                ...(extensionRoot && uiChangeDetected ? { runtime: { kind: 'browser-extension', verified: false } } : {}),
               };
             } catch (error) {
               console.warn('[chat] completion verification failed:', error.message);
@@ -3868,10 +3910,12 @@ export function registerChatRoute(app, {
             continueLoop = false;
           } else if (completionRequested && browserVerificationRequired && !passedBrowserVerification(browserVerification)) {
             runtimeVerificationNudges++;
-            if (runtimeVerificationNudges > MAX_RUNTIME_VERIFICATION_NUDGES || noTools || !browserEnabled
+            if (extensionRoot || runtimeVerificationNudges > MAX_RUNTIME_VERIFICATION_NUDGES || noTools || !browserEnabled
               || (bodyHeadlessTask && ((_projectRecord && !_projectRecord.permissions?.browser)
                 || !nativeBrowserWindow(getMainWindows() || [])))) {
-              const unavailable = noTools ? 'Tool execution is disabled in this session.'
+              const unavailable = extensionRoot
+                ? 'The required live browser-extension E2E cannot run in the in-app webview. Extension tests/build do not prove behavior in the installed extension runtime.'
+                : noTools ? 'Tool execution is disabled in this session.'
                 : (!browserEnabled || (bodyHeadlessTask && _projectRecord && !_projectRecord.permissions?.browser))
                   ? 'Browser permission is disabled for this task.'
                   : bodyHeadlessTask && !nativeBrowserWindow(getMainWindows() || [])
@@ -4234,11 +4278,14 @@ export function registerChatRoute(app, {
             } else if (autonomousMode && finalMarker === 'DONE' && await tryStopHookGate()) {
               // keep continueLoop = true
             } else {
-              if (!autonomousMode && browserVerificationRequired) {
+              if (!autonomousMode && (browserVerificationRequired || (extensionRoot && uiChangeDetected))) {
                 send({ type: 'task_result',
-                  status: completionRequested && passedBrowserVerification(browserVerification) ? 'DONE' : 'BLOCKED',
+                  status: completionRequested && (browserVerificationRequired
+                    ? passedBrowserVerification(browserVerification) : validationToolUsed) ? 'DONE' : 'BLOCKED',
                   content: assistantText,
-                  verification: { ...(qaResultSummary || {}), browser: browserVerification },
+                  verification: { ...(qaResultSummary || {}),
+                    ...(browserVerificationRequired ? { browser: browserVerification }
+                      : { runtime: { kind: 'browser-extension', verified: false } }) },
                 });
               }
               send({ type: 'done', finish_reason: finishReason, usage: streamUsage || null,
@@ -4387,7 +4434,7 @@ export function registerChatRoute(app, {
         }
       }
       // ── Trace: loop completed normally ───────────────────────────────
-      if (browserVerificationRequired && !passedBrowserVerification(browserVerification) && !upstreamAbort.signal.aborted) {
+      if (!toolsLockedForFinalResponse && browserVerificationRequired && !passedBrowserVerification(browserVerification) && !upstreamAbort.signal.aborted) {
         const error = browserVerification?.error || qaResultSummary?.browser?.error
           || 'Mandatory post-edit in-app browser journey is unverified';
         send({ type: 'task_result', status: 'BLOCKED', content: error,

@@ -735,6 +735,118 @@ describe('POST /api/chat lifecycle hooks', () => {
     expect(llm.create.mock.calls.at(-1)[0].tools).toBeUndefined();
   });
 
+  it('ends a locked implementation turn once without asking for unavailable edits or browser checks', async () => {
+    llm.supportsTools = true;
+    for (let index = 0; index < 14; index++) {
+      write(path.join(workspaceRoot, `target-${index}.js`), `export const value = ${index};\n`);
+    }
+    let reads = 0;
+    llm.create.mockImplementation(async params => params.tools
+      ? mockToolCallStream('fauna_read_file', { path: path.join(workspaceRoot, `target-${reads++}.js`) })
+      : mockStopStream('I could not finish the dropdown patch.'));
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'Apply the dropdown patch' }], clientContext: 'test' },
+    });
+    const finalCalls = llm.create.mock.calls.filter(([params]) => params.stream && !params.tools);
+    expect(finalCalls).toHaveLength(1);
+    const events = parseSse(res.chunks);
+    expect(events.filter(event => event.type === 'task_result')).toEqual([
+      expect.objectContaining({ status: 'BLOCKED', verification: expect.objectContaining({ ok: false }) }),
+    ]);
+    expect(events.find(event => event.type === 'done')).toMatchObject({ finish_reason: 'loop_stopped' });
+  });
+
+  it.each(['Apply the code patch', 'Finish the implementation'])('recovers a read-only implementation loop and executes a patch: %s', async prompt => {
+    llm.supportsTools = true;
+    const target = path.join(workspaceRoot, 'changed.js');
+    write(target, 'const value = 1;\n');
+    write(path.join(workspaceRoot, 'package.json'), JSON.stringify({ scripts: { check: 'node --check changed.js' } }));
+    for (let index = 0; index < 4; index++) {
+      llm.create.mockResolvedValueOnce(mockToolCallStream('fauna_read_file', { path: target, startLine: index + 1 }));
+    }
+    llm.create
+      .mockResolvedValueOnce(mockToolCallStream('fauna_apply_patch', {
+        patch: `*** Begin Patch\n*** Update File: ${target}\n@@\n-const value = 1;\n+const value = 2;\n*** End Patch`,
+      }))
+      .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command: 'npm run check', cwd: workspaceRoot }))
+      .mockResolvedValueOnce(mockStopStream('Patched and checked the file.'));
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: prompt }], clientContext: 'test' },
+    });
+    expect(llm.create.mock.calls[4][0].tool_choice).toEqual({ type: 'function', function: { name: 'fauna_apply_patch' } });
+    expect(fs.readFileSync(target, 'utf8')).toBe('const value = 2;\n');
+    expect(parseSse(res.chunks).some(event => event.type === 'task_result' && event.status === 'BLOCKED')).toBe(false);
+  });
+
+  it.each([false, true, 'request'])('uses extension checks without inventing live browser evidence, explicitBrowser=%s', async explicitBrowser => {
+    llm.supportsTools = true;
+    const extension = path.join(workspaceRoot, 'extensions', 'grader');
+    const html = path.join(extension, 'sidepanel.html');
+    write(path.join(extension, 'manifest.json'), JSON.stringify({
+      manifest_version: 3, name: 'Grader', version: '1.0', side_panel: { default_path: 'sidepanel.html' },
+    }));
+    write(path.join(extension, 'package.json'), JSON.stringify({ scripts: { test: 'node --test check.test.cjs' } }));
+    write(path.join(extension, 'check.test.cjs'), [
+      "const fs = require('node:fs');",
+      "require('node:test')('grader dropdown', () => {",
+      "  require('node:assert/strict').match(fs.readFileSync('sidepanel.html', 'utf8'), /<select/);",
+      "  fs.writeFileSync('tests-ran.txt', 'passed');",
+      '});',
+    ].join('\n'));
+    llm.create
+      .mockResolvedValueOnce(mockToolCallStream('fauna_write_file', { path: html, content: '<select id="grade-model"></select>' }))
+      .mockResolvedValueOnce(mockStopStream('Implemented the dropdown.'))
+      .mockImplementation(async () => mockStopStream('Implemented; extension tests passed. Live extension E2E was not verified.'));
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'Apply the grader dropdown patch' +
+          (explicitBrowser === 'request' ? ' and verify the UI end-to-end' : '') }],
+        taskCwd: workspaceRoot, requireBrowserVerification: explicitBrowser === true, clientContext: 'test' },
+    });
+    expect(fs.readFileSync(path.join(extension, 'tests-ran.txt'), 'utf8')).toBe('passed');
+    const events = parseSse(res.chunks);
+    const result = events.find(event => event.type === 'task_result');
+    if (explicitBrowser) {
+      expect(result.status).toBe('BLOCKED');
+      expect(result.content).toContain('cannot run in the in-app webview');
+      expect(events.find(event => event.type === 'done').finish_reason).toBe('browser_verification_failed');
+      expect(llm.create.mock.calls).toHaveLength(3);
+    } else {
+      expect(result).toMatchObject({
+        status: 'DONE', verification: { ok: true, runtime: { kind: 'browser-extension', verified: false } },
+      });
+      expect(result.verification.browser).toBeUndefined();
+      expect(llm.create.mock.calls).toHaveLength(3);
+      expect(llm.create.mock.calls[2][0].messages.some(message =>
+        /Live extension E2E remains unverified/.test(message.content || '')
+      )).toBe(true);
+    }
+  });
+
+  it('ends a user-decision pause without running validation or restarting execution', async () => {
+    llm.supportsTools = true;
+    const runStore = createRunStore({ configDir: workspaceRoot });
+    registerChatRoute(app, { ...makeDeps(workspaceRoot), runStore });
+    llm.create
+      .mockResolvedValueOnce(mockToolCallStream('fauna_ask_user_decision', {
+        title: 'Choose a target', prompt: 'Which file should be changed?',
+        options: [
+          { id: 'one', label: 'First file', response: 'Use the first file' },
+          { id: 'two', label: 'Second file', response: 'Use the second file' },
+        ],
+      }))
+      .mockResolvedValueOnce(mockStopStream('NEEDS-INPUT: Choose the file to change.'));
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'Apply the dropdown patch' }], clientContext: 'test' },
+    });
+    const events = parseSse(res.chunks);
+    expect(llm.create).toHaveBeenCalledTimes(2);
+    expect(llm.create.mock.calls[1][0].tools).toBeUndefined();
+    expect(events.find(event => event.type === 'task_result')).toMatchObject({ status: 'NEEDS-INPUT' });
+    expect(events.find(event => event.type === 'done')).toMatchObject({ finish_reason: 'awaiting_user_action' });
+    const runId = events.find(event => event.type === 'run_started').runId;
+    expect(runStore.get(runId).status).toBe('paused');
+  });
+
   it('continues implementation requests after mutation without validation', async () => {
     llm.supportsTools = true;
     write(path.join(workspaceRoot, 'package.json'), JSON.stringify({ scripts: { build: 'node --check changed.js' } }));

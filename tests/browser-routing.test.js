@@ -3,10 +3,36 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { passedBrowserVerification } from '../lib/browser-verification.js';
+import { resolveBrowserExtensionRoot } from '../lib/verification-command.js';
 
 const source = fs.readFileSync(path.join(process.cwd(), 'public/js/browser.js'), 'utf8');
 const chatSource = fs.readFileSync(path.join(process.cwd(), 'public/js/chat.js'), 'utf8');
 const shellSource = fs.readFileSync(path.join(process.cwd(), 'public/js/shell.js'), 'utf8');
+
+it('scopes extension verification from real manifests without exempting web or mixed-package changes', () => {
+  const root = fs.mkdtempSync(path.join(process.cwd(), '.fauna-browser-scope-'));
+  try {
+    const extension = path.join(root, 'extensions', 'grader');
+    const website = path.join(root, 'website');
+    fs.mkdirSync(path.join(extension, 'src'), { recursive: true });
+    fs.mkdirSync(website);
+    fs.writeFileSync(path.join(extension, 'package.json'), '{}');
+    fs.writeFileSync(path.join(extension, 'manifest.json'), JSON.stringify({
+      manifest_version: 3, name: 'Grader', version: '1.0', side_panel: { default_path: 'panel.html' },
+    }));
+    fs.writeFileSync(path.join(website, 'package.json'), '{}');
+    fs.writeFileSync(path.join(website, 'manifest.json'), JSON.stringify({ name: 'Website', version: '1.0' }));
+    const panel = path.join(extension, 'src', 'panel.ts');
+    const page = path.join(website, 'index.html');
+    expect(resolveBrowserExtensionRoot(root, [panel])).toBe(extension);
+    expect(resolveBrowserExtensionRoot(extension)).toBe(extension);
+    expect(resolveBrowserExtensionRoot(root, [page])).toBeNull();
+    expect(resolveBrowserExtensionRoot(root, [panel, page])).toBeNull();
+    expect(resolveBrowserExtensionRoot(extension, [path.join(root, 'outside.html')])).toBeNull();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 describe('browser backend routing', () => {
   it('gives extension blocks precedence over internal legacy blocks', () => {

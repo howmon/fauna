@@ -16,6 +16,10 @@ function withUserText(text) {
   });
 }
 
+it('keeps editing tools for the exact compacted dropdown implementation request', () => {
+  expect(withUserText('Finish the model dropdown implementation').code).toBe(true);
+});
+
 describe('frontend quality routing', () => {
   it.each([
     'Design a web app for booking music lessons.',

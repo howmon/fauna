@@ -57,13 +57,15 @@ describe('chat.js result-guarantee guards', () => {
 
   it('write-intent regex covers rewrite/rebuild/regenerate/generate/scaffold/produce/draft', () => {
     // Extract the exact regex source for _writeIntentTurn and construct it.
-    const m = chatSource.match(/const\s+_writeIntentTurn\s*=\s*(\/[^\n]+\/i)\.test\(_lastUserQuery/);
+    const m = chatSource.match(/const\s+_writeIntentTurn\s*=\s*(\/[^\n]+\/i)\.test\(/);
     expect(m, 'could not locate _writeIntentTurn regex').toBeTruthy();
     // eslint-disable-next-line no-new-func
     const re = new Function('return ' + m[1])();
     // Original verbs still match.
     expect(re.test('please fix the login bug')).toBe(true);
     expect(re.test('proceed')).toBe(true);
+    expect(re.test('Finish the model dropdown implementation')).toBe(true);
+    expect(re.test('find the sidebar implementation')).toBe(false);
     // New verbs from the 30-page-docx transcript must match.
     expect(re.test('rewrite the report as a 30-page docx')).toBe(true);
     expect(re.test('rebuild the pipeline')).toBe(true);
