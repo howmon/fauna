@@ -62,7 +62,7 @@ import { buildProjectProfile, formatProfileForPrompt } from '../lib/profile.js';
 import { extractFacts as extractMemoryFacts } from '../lib/memory-extractor.js';
 import { extractCorrections } from '../lib/failure-learning.js';
 import { buildAgentPolicy, discoverCustomizations, filterToolsByPolicy, resolveToolPolicy } from '../../lib/customization-registry.js';
-import { getProjectSystemContext, buildContextPayload, getProject, appendAutonomousRunLog, resolveProjectSourceRoot, setWorkItemBrowserVerification } from '../../project-manager.js';
+import { getProjectSystemContext, buildContextPayload, getProject, appendAutonomousRunLog, resolveProjectSourceRoot, setWorkItemBrowserVerification, setWorkItemVerification } from '../../project-manager.js';
 import { estimateTokens, computeBudget } from '../lib/token-budget.js';
 import { summarizeHistory } from '../lib/summarize-history.js';
 import { withTimeout } from '../lib/async-utils.js';
@@ -74,7 +74,7 @@ import { ChatTracer } from '../../lib/run-ledger.js';
 import { buildDesignTaskContext } from '../../design-prompts.js';
 import { formatImageAssetContext, persistConversationImageAssets } from '../lib/attachment-assets.js';
 import { projectCapabilities } from '../lib/capability-projection.js';
-import { detectAutoVerifyCommand } from '../../lib/verification-command.js';
+import { detectAutoVerifyCommand, resolveVerificationRoot, validationCommandKeys } from '../../lib/verification-command.js';
 import { isUiChange, passedBrowserVerification } from '../../lib/browser-verification.js';
 
 // ── Tool-driven Decision Prompt bridge ────────────────────────────────────
@@ -853,7 +853,12 @@ export function registerChatRoute(app, {
     const qaCommand = effectiveQa && typeof effectiveQa.command === 'string'
       ? effectiveQa.command.trim()
       : '';
-    let verificationCwd = _projectRecord?.rootPath || taskCwd || workspaceRoot;
+    const verificationProjectRoot = _projectRecord?.rootPath || taskCwd || workspaceRoot;
+    let verificationCwd = verificationProjectRoot;
+    const changedVerificationFiles = new Set();
+    let verificationRevision = 0;
+    const timedOutValidations = new Map();
+    const successfulValidations = new Map();
 
     // Deploy gate (Codex-style publish hook). Runs ONLY when autonomous,
     // a command is configured, AND the client passed deployApproved:true on
@@ -1837,6 +1842,7 @@ export function registerChatRoute(app, {
         runId: runId || null,
         convId: req.body?.conversationId || null,
         activeAgentName: agentName || null,
+        getVerificationFiles: () => [...changedVerificationFiles],
         recordFileEdit: (absPath, oldContent) => {
           if (!absPath) return;
           if (oldContent !== null && typeof oldContent !== 'string') return;
@@ -1909,6 +1915,14 @@ export function registerChatRoute(app, {
           if (!effectiveCwd && taskCwd) effectiveCwd = taskCwd;
           const shellWorkDir = effectiveCwd || os.homedir();
           const launchProjectDir = commandWorkingDirectory(command, shellWorkDir);
+          const validationKeys = validationCommandKeys(command, launchProjectDir);
+          if (validationKeys.some(key => timedOutValidations.get(key) === verificationRevision)) {
+            return JSON.stringify({
+              ok: false, code: 'VALIDATION_TIMEOUT_RETRY_BLOCKED', timedOut: true,
+              error: 'This validation already timed out without intervening code changes. Do not repeat it unchanged; use a narrower check, fix the cause, or report the blocker.',
+              command, cwd: launchProjectDir, exitCode: null,
+            });
+          }
           const inspectedCommand = commandWithPackageScript(command, launchProjectDir);
           const electronTarget = electronDevServerTarget(inspectedCommand);
           if (electronTarget) {
@@ -1989,7 +2003,7 @@ export function registerChatRoute(app, {
               cwd: effectiveCwd,
               shellBin,
               isWin,
-              augmentedPath,
+              augmentedPath: [augmentedPath || process.env.PATH, path.join(os.homedir(), '.bun', 'bin')].filter(Boolean).join(path.delimiter),
               env: reason === 'task completion verification' ? { ...npmEnv, CI: '1' } : npmEnv,
               timeoutMs: typeof timeoutMs === 'number' ? Math.min(timeoutMs, 600000) : undefined,
               maxOutputChars: typeof maxOutputBytes === 'number' && maxOutputBytes > 0
@@ -2013,6 +2027,13 @@ export function registerChatRoute(app, {
             }),
             command,
           );
+          if (result.timedOut) {
+            for (const key of validationKeys) timedOutValidations.set(key, verificationRevision);
+          }
+          for (const key of validationKeys) {
+            if (result.ok && result.exitCode === 0) successfulValidations.set(key, { revision: verificationRevision, result });
+            else successfulValidations.delete(key);
+          }
           // Surface any presentable files this command created as entity cards.
           // Only on a clean exit so we don't card partial/failed output.
           if (result && result.exitCode === 0 && !result.killed && !result.timedOut) {
@@ -2489,6 +2510,8 @@ export function registerChatRoute(app, {
         'agent_write_file', 'agent_write_files', 'agent_str_replace', 'agent_apply_patch',
       ]);
       const invalidateVerification = () => {
+        verificationRevision++;
+        if (projectId && workItemId) setWorkItemVerification(projectId, workItemId, null);
         codeMutationUsed = true;
         validationToolUsed = false;
         qaRan = false;
@@ -3363,7 +3386,11 @@ export function registerChatRoute(app, {
                     browserVerificationRequired ||= isUiChange('', files);
                     browserVerification = null;
                     persistBrowserVerification();
-                    if (args?.cwd) verificationCwd = args.cwd;
+                    for (const file of files) {
+                      const name = typeof file === 'string' ? file : file.path;
+                      if (name) changedVerificationFiles.add(path.resolve(args?.cwd || verificationProjectRoot, name));
+                    }
+                    verificationCwd = resolveVerificationRoot(verificationProjectRoot, [...changedVerificationFiles]);
                     invalidateVerification();
                   }
                 }
@@ -3375,7 +3402,10 @@ export function registerChatRoute(app, {
                     persistBrowserVerification();
                     mutatingToolUsed = true;
                     runtimeVerificationUsed = false;
-                    verificationCwd = commandWorkingDirectory(args?.command, args?.cwd || _projectRecord?.rootPath || taskCwd || os.homedir());
+                    if (!changedVerificationFiles.size) {
+                      const commandCwd = commandWorkingDirectory(args?.command, args?.cwd || verificationProjectRoot);
+                      verificationCwd = resolveVerificationRoot(verificationProjectRoot, [commandCwd]);
+                    }
                     invalidateVerification();
                   }
                   if (_isValidationShellCommand(args?.command)) validationToolUsed = true;
@@ -3713,10 +3743,15 @@ export function registerChatRoute(app, {
             && (codeMutationUsed || (autonomousMode && /^\s*(?:DONE|TASK_COMPLETE)\s*:/i.test(assistantText || '')))) {
             const name = 'autonomous_qa_gate';
             const callId = 'verification-' + turnUsage.iterations;
-            const args = { command: verificationCommand, cwd: verificationCwd };
+            const checkCwd = qaCommand ? verificationProjectRoot : verificationCwd;
+            const args = { command: verificationCommand, cwd: checkCwd };
+            const keys = validationCommandKeys(verificationCommand, checkCwd);
+            const priorCheck = keys.length === 1 ? successfulValidations.get(keys[0]) : null;
+            const reuseCheck = priorCheck?.revision === verificationRevision;
             send({
               type: 'tool_call', name, callId, args, command: verificationCommand,
-              label: 'Run completion checks', activity: buildToolActivityDescriptor('fauna_shell_exec', args),
+              label: reuseCheck ? 'Reuse passed completion check' : 'Run completion checks',
+              activity: buildToolActivityDescriptor('fauna_shell_exec', args),
             });
             let result;
             try {
@@ -3725,17 +3760,20 @@ export function registerChatRoute(app, {
               const preHooks = await runHooks(customizationRecords, 'PreToolUse', {
                 toolName: 'fauna_shell_exec', args, agentName: agentName || null,
                 conversationId: req.body?.conversationId || null,
-              }, { cwd: verificationCwd });
-              result = noTools || policyDenied || preHooks.blocked || preHooks.permissionDecision === 'deny'
+              }, { cwd: checkCwd });
+              result = reuseCheck ? scrubSecrets(JSON.stringify(priorCheck.result)).text
+                : noTools || policyDenied || preHooks.blocked || preHooks.permissionDecision === 'deny'
                 ? JSON.stringify({ ok: false, error: preHooks.stopReason || 'Tool policy disables shell verification' })
                 : await selfToolContext.runShell({
-                  command: verificationCommand, cwd: verificationCwd,
+                  command: verificationCommand, cwd: checkCwd,
                   reason: 'task completion verification', timeoutMs: 300000, structured: true,
                 });
               const parsed = JSON.parse(result);
               qaResultSummary = {
                 ok: parsed.ok === true && parsed.exitCode === 0 && !parsed.killed && !parsed.timedOut,
                 command: verificationCommand, exitCode: parsed.exitCode ?? null,
+                cwd: checkCwd, timedOut: parsed.timedOut === true,
+                reused: reuseCheck,
                 output: result.slice(0, 8000),
               };
             } catch (error) {
@@ -3746,13 +3784,19 @@ export function registerChatRoute(app, {
             send({ type: 'tool_result', name, result });
             send({ type: 'tool_activity_result', name, callId, ...buildToolActivityResult('fauna_shell_exec', args, result) });
             qaRan = qaResultSummary.ok;
+            if (projectId && workItemId) {
+              setWorkItemVerification(projectId, workItemId, {
+                ...qaResultSummary, runId: requestedRunId || runId,
+                command: verificationCommand, cwd: checkCwd, output: result,
+              });
+            }
             validationToolUsed = qaRan;
             allMessages.push({ role: 'assistant', content: assistantText || '' });
             if (qaRan) {
               allMessages.push({ role: 'user', content: '[System: Completion verification PASSED. Command: `' + verificationCommand + '`. Output:\n' + result.slice(0, 8000) + '\nNow give your final summary citing this actual result. If you edit again, verification must run again.]' });
             } else {
               verificationFailures++;
-              if (verificationFailures >= 3 || noTools || shellEnabled === false) {
+              if (qaResultSummary.timedOut || verificationFailures >= 3 || noTools || shellEnabled === false) {
                 const error = 'Completion blocked: verification did not pass. Command: ' + verificationCommand + '\n' + result.slice(0, 4000);
                 send({ type: 'error', error });
                 send({ type: 'task_result', status: 'BLOCKED', content: error });

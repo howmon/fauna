@@ -1748,6 +1748,8 @@ export function setWorkItemVerification(projectId, itemId, verification) {
       runId:     verification.runId || null,
       command:   String(verification.command || '').slice(0, 1000),
       source:    verification.source === 'judge' ? 'judge' : 'shell',
+      cwd:       typeof verification.cwd === 'string' ? verification.cwd : null,
+      timedOut:  verification.timedOut === true,
     });
   }
 

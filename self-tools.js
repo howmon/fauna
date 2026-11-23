@@ -3044,7 +3044,7 @@ export const SELF_TOOL_DEFS = [
     type: 'function',
     function: {
       name: 'fauna_workitem_verify',
-      description: 'Run the verifier for a Kanban work item and record the result on the card. Resolution order for the command: 1) the card\'s `verifyCommand` (per-card override, settable via fauna_workitem_update), 2) the project\'s `qa.command`, 3) none → skipped pass. Runs the shell command with cwd=project.rootPath, captures stdout/stderr (clipped to 8 KB), times out at 5 min. On exit-code 0 the card is marked verified=true and you may move it to "done"; non-zero blocks the done move. MUST be called before fauna_workitem_move to column="done" on any project that has a verifier — otherwise the move is rejected. The result is also appended as a comment.',
+      description: 'Run and record the Kanban verifier: card.verifyCommand, then project.qa.command, then tests from the changed package or card fileScope. Explicit project QA stays at the project root; auto-detected tests run in their own package. Missing tests are unverified, never a pass. Captures output and exit code with a 5-minute timeout. Do not repeat timed-out verification unchanged: fix the cause or choose a narrower verifier. A successful result is required before moving to done; results are recorded on the card.',
       parameters: {
         type: 'object',
         properties: {
@@ -5456,8 +5456,10 @@ ${cardsHtml}
         const mod = await import('./lib/work-item-verifier.js');
         const r = await mod.verifyWorkItem(pid, args.itemId, {
           timeoutMs: args.timeoutMs,
-          runId: null,
+          runId: context.runId || null,
           postComment: true,
+          files: context.getVerificationFiles?.() || [],
+          runShell: context.runShell,
         });
         _emitBoardEventSafe({ type: 'updated', projectId: pid, itemId: args.itemId });
         // Clip the output for the tool response (the comment kept the full version).

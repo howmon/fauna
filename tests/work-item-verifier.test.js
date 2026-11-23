@@ -27,6 +27,7 @@ vi.mock('../project-manager.js', () => ({
 
 const { runVerifyCommand, verifyWorkItem, resolveVerifyCommand, __test } =
   await import('../lib/work-item-verifier.js');
+const { resolveVerificationRoot } = await import('../lib/verification-command.js');
 let projectRoot;
 
 beforeEach(() => {
@@ -38,6 +39,37 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
 
 describe('resolveVerifyCommand', () => {
+  it('resolves a changed nested package instead of the parent test suite', () => {
+    const nested = path.join(projectRoot, 'extensions', 'eval');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, 'package.json'), JSON.stringify({
+      packageManager: 'bun@1.3.10', scripts: { 'test:unit': 'bun engine-tests.ts' },
+    }));
+    fs.writeFileSync(path.join(nested, 'package.json'), JSON.stringify({
+      scripts: { test: 'node --test tests/*.test.cjs' },
+    }));
+    const project = { rootPath: projectRoot };
+    expect(resolveVerifyCommand(project, { fileScope: ['extensions/eval/src/**'] })).toEqual({
+      command: 'npm run test', source: 'auto', cwd: nested,
+    });
+    expect(resolveVerifyCommand(project, {}, { files: [path.join(nested, 'src', 'changed.ts')] })).toEqual({
+      command: 'npm run test', source: 'auto', cwd: nested,
+    });
+    expect(resolveVerifyCommand({ ...project, qa: { command: 'explicit-qa' } }, {}, {
+      files: [path.join(nested, 'src', 'changed.ts')],
+    })).toEqual({ command: 'explicit-qa', source: 'project' });
+  });
+
+  it('uses the common package when changes span multiple packages', () => {
+    fs.writeFileSync(path.join(projectRoot, 'package.json'), '{}');
+    for (const name of ['one', 'two']) {
+      const root = path.join(projectRoot, 'packages', name);
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(path.join(root, 'package.json'), '{}');
+    }
+    expect(resolveVerificationRoot(projectRoot, ['packages/one/file.js', 'packages/two/file.js'])).toBe(projectRoot);
+  });
+
   it('prefers card.verifyCommand', () => {
     const r = resolveVerifyCommand({ qa: { command: 'pj' } }, { verifyCommand: 'card-cmd' });
     expect(r).toEqual({ command: 'card-cmd', source: 'card' });
@@ -134,6 +166,36 @@ describe('runVerifyCommand', () => {
 });
 
 describe('verifyWorkItem', () => {
+  it('runs and reuses the scoped card check within the same run', async () => {
+    const nested = path.join(projectRoot, 'extensions', 'eval');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, 'package.json'), JSON.stringify({
+      packageManager: 'bun@1.3.10', scripts: { 'test:unit': 'bun unrelated-tests.ts' },
+    }));
+    fs.writeFileSync(path.join(nested, 'package.json'), JSON.stringify({ scripts: { test: 'node --test checks.test.cjs' } }));
+    fs.writeFileSync(path.join(nested, 'checks.test.cjs'),
+      "require('node:test')('scoped check', () => require('node:fs').appendFileSync('checks-ran.txt', 'pass\\n'));\n");
+    _db.projects.push({ id: 'p1', rootPath: projectRoot, backlog: [{ id: 'c1', fileScope: ['extensions/eval/**'] }] });
+    const first = await verifyWorkItem('p1', 'c1', { runId: 't1' });
+    expect(first).toMatchObject({ ok: true, command: 'npm run test', cwd: nested });
+    const second = await verifyWorkItem('p1', 'c1', { runId: 't1' });
+    expect(second).toMatchObject({ ok: true, reused: true, cwd: nested });
+    expect(fs.readFileSync(path.join(nested, 'checks-ran.txt'), 'utf8')).toBe('pass\n');
+  });
+
+  it('does not repeat a timed-out verifier unchanged in the same run', async () => {
+    _db.projects.push({ id: 'p1', rootPath: projectRoot, backlog: [{ id: 'c1', verifyCommand: 'npm run test' }] });
+    const runShell = vi.fn(async () => JSON.stringify({
+      ok: false, timedOut: true, exitCode: 130, stderr: 'Timeout',
+    }));
+    await verifyWorkItem('p1', 'c1', { runId: 't1', runShell });
+    const second = await verifyWorkItem('p1', 'c1', { runId: 't1', runShell });
+    expect(second).toMatchObject({ ok: false, timedOut: true, code: 'VALIDATION_TIMEOUT_RETRY_BLOCKED' });
+    expect(runShell).toHaveBeenCalledTimes(1);
+    await verifyWorkItem('p1', 'c1', { runId: 't2', runShell });
+    expect(runShell).toHaveBeenCalledTimes(2);
+  });
+
   it('executes detected tests and persists the real result on a card', async () => {
     fs.writeFileSync(path.join(projectRoot, 'package.json'), JSON.stringify({
       scripts: { test: 'node --test checks.test.cjs' },

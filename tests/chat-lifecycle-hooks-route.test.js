@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { registerChatRoute } from '../server/routes/chat.js';
 import { createRunStore } from '../server/lib/run-store.js';
+import * as shellRunner from '../server/lib/shell-runner.js';
 
 const llm = vi.hoisted(() => ({ create: vi.fn(), supportsTools: false }));
 
@@ -132,6 +133,7 @@ describe('POST /api/chat lifecycle hooks', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     fs.rmSync(workspaceRoot, { recursive: true, force: true });
   });
 
@@ -614,6 +616,124 @@ describe('POST /api/chat lifecycle hooks', () => {
         '});',
       ].join('\n'));
     }
+
+    it('keeps a changed subpackage scoped and reuses its successful post-edit tests', async () => {
+      llm.supportsTools = true;
+      const nested = path.join(workspaceRoot, 'extensions', 'eval');
+      write(path.join(workspaceRoot, 'package.json'), JSON.stringify({
+        packageManager: 'bun@1.3.10', scripts: { 'test:unit': 'bun unrelated-tests.ts' },
+      }));
+      write(path.join(nested, 'package.json'), JSON.stringify({ scripts: { test: 'node --test checks.test.cjs' } }));
+      write(path.join(nested, 'changed.js'), 'broken\n');
+      write(path.join(nested, 'checks.test.cjs'), [
+        "const fs = require('node:fs');",
+        "require('node:test')('scoped change', () => {",
+        "  require('node:assert/strict').equal(fs.readFileSync('changed.js', 'utf8'), 'fixed\\n');",
+        "  fs.appendFileSync('checks-ran.txt', 'pass\\n');",
+        '});',
+      ].join('\n'));
+      llm.create
+        .mockResolvedValueOnce(mockToolCallStream('fauna_apply_patch', {
+          cwd: workspaceRoot,
+          patch: '*** Begin Patch\n*** Update File: extensions/eval/changed.js\n@@\n-broken\n+fixed\n*** End Patch',
+        }))
+        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { cwd: nested, command: 'npm test' }))
+        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { cwd: workspaceRoot, command: 'pwd' }))
+        .mockResolvedValueOnce(mockStopStream('Implemented the package change.'))
+        .mockResolvedValueOnce(mockStopStream('Completed after the package tests passed.'));
+      const res = await app.invoke('POST', '/api/chat', {
+        body: { messages: [{ role: 'user', content: 'implement the package fix' }], clientContext: 'test' },
+      });
+      const gate = parseSse(res.chunks).find(event => event.type === 'tool_call' && event.name === 'autonomous_qa_gate');
+      expect(gate.args).toEqual({ command: 'npm run test', cwd: nested });
+      expect(gate.label).toBe('Reuse passed completion check');
+      expect(fs.readFileSync(path.join(nested, 'checks-ran.txt'), 'utf8')).toBe('pass\n');
+      expect(parseSse(res.chunks).some(event => event.type === 'error')).toBe(false);
+    });
+
+    it('blocks a timed-out suite retry even if PATH setup and version probes differ', async () => {
+      llm.supportsTools = true;
+      const realRunShell = shellRunner.runShell;
+      const execute = vi.spyOn(shellRunner, 'runShell').mockImplementation(async options => (
+        options.command.includes('test:unit')
+          ? { ok: false, timedOut: true, exitCode: 130, stdout: '', stderr: 'Timed out', cwd: options.cwd, command: options.command }
+          : realRunShell(options)
+      ));
+      llm.create
+        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', {
+          cwd: workspaceRoot, command: 'export PATH="$HOME/.bun/bin:$PATH" && bun --version && bun run test:unit',
+        }))
+        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', {
+          cwd: workspaceRoot, command: 'export PATH="$HOME/.bun/bin:$PATH" && bun run test:unit',
+        }))
+        .mockResolvedValueOnce(mockStopStream('BLOCKED: the unchanged test suite timed out.'));
+      const res = await app.invoke('POST', '/api/chat', {
+        body: { messages: [{ role: 'user', content: 'run the test suite' }], clientContext: 'test' },
+      });
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(llm.create.mock.calls.at(-1)[0].messages.some(message =>
+        message.role === 'tool' && message.content.includes('VALIDATION_TIMEOUT_RETRY_BLOCKED')
+      )).toBe(true);
+      expect(parseSse(res.chunks).some(event =>
+        event.type === 'tool_activity_result' && event.status === 'failed'
+      )).toBe(true);
+    });
+
+    it('allows the same timed-out check after a real edit', async () => {
+      llm.supportsTools = true;
+      const realRunShell = shellRunner.runShell;
+      const execute = vi.spyOn(shellRunner, 'runShell').mockImplementation(async options => (
+        options.command.includes('test:unit')
+          ? { ok: false, timedOut: true, exitCode: 130, stdout: '', stderr: 'Timed out', cwd: options.cwd, command: options.command }
+          : realRunShell(options)
+      ));
+      llm.create
+        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { cwd: workspaceRoot, command: 'bun run test:unit' }))
+        .mockResolvedValueOnce(mockToolCallStream('fauna_write_file', { path: path.join(workspaceRoot, 'fix.js'), content: 'const fixed = true;\n' }))
+        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { cwd: workspaceRoot, command: 'bun run test:unit' }))
+        .mockResolvedValueOnce(mockStopStream('BLOCKED: the suite still times out after the fix.'));
+      await app.invoke('POST', '/api/chat', {
+        body: { messages: [{ role: 'user', content: 'run the test suite' }], clientContext: 'test' },
+      });
+      expect(execute.mock.calls.filter(([options]) => options.command === 'bun run test:unit')).toHaveLength(2);
+    });
+
+    it('blocks a timed-out automatic gate immediately instead of running it three times', async () => {
+      llm.supportsTools = true;
+      seedCompletionTests();
+      const realRunShell = shellRunner.runShell;
+      const execute = vi.spyOn(shellRunner, 'runShell').mockImplementation(async options => (
+        options.command === 'npm run test'
+          ? { ok: false, timedOut: true, exitCode: 130, stdout: '', stderr: 'Timed out', cwd: options.cwd, command: options.command }
+          : realRunShell(options)
+      ));
+      llm.create
+        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { cwd: workspaceRoot, command: 'touch changed.js' }))
+        .mockResolvedValueOnce(mockStopStream('Implemented the change.'));
+      const res = await app.invoke('POST', '/api/chat', {
+        body: { messages: [{ role: 'user', content: 'fix the code' }], clientContext: 'test' },
+      });
+      expect(execute.mock.calls.filter(([options]) => options.command === 'npm run test')).toHaveLength(1);
+      expect(llm.create).toHaveBeenCalledTimes(2);
+      expect(parseSse(res.chunks).at(-1)).toMatchObject({ type: 'done', finish_reason: 'verification_failed' });
+    });
+
+    it('does not reuse a printed test command or a command whose failure is masked', async () => {
+      llm.supportsTools = true;
+      seedCompletionTests();
+      llm.create
+        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { cwd: workspaceRoot, command: 'touch changed.js' }))
+        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { cwd: workspaceRoot, command: 'echo "npm run test"' }))
+        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { cwd: workspaceRoot, command: 'npm run test || true' }))
+        .mockResolvedValueOnce(mockStopStream('Implemented the change.'))
+        .mockResolvedValueOnce(mockStopStream('Completed with real verification.'));
+      const res = await app.invoke('POST', '/api/chat', {
+        body: { messages: [{ role: 'user', content: 'fix the code' }], clientContext: 'test' },
+      });
+      const gate = parseSse(res.chunks).find(event => event.type === 'tool_call' && event.name === 'autonomous_qa_gate');
+      expect(gate.label).toBe('Run completion checks');
+      expect(fs.readFileSync(path.join(workspaceRoot, 'verification-runs.txt'), 'utf8')).toBe('undefined\n1\n');
+    });
 
     it('actually runs detected tests before completing a normal coding turn', async () => {
       llm.supportsTools = true;

@@ -297,7 +297,7 @@ function _buildTaskContext(project, card) {
   lines.push('');
   lines.push('## How to finish');
   lines.push('1. Do the work end-to-end (read files, run shells, edit code as needed).');
-  lines.push('2. Before claiming completion, run relevant tests after your last edit, then call `fauna_workitem_verify` (per-card `verifyCommand`, else project `qa.command`, else auto-detected project tests). The real command output and exit code are recorded on the card. Read/search/write tool calls are not test evidence.');
+  lines.push('2. Before claiming completion, run relevant tests in the package you changed after your last edit, then call `fauna_workitem_verify` (per-card `verifyCommand`, else project `qa.command`, else changed-package tests). Do not replace a passing subpackage check with unrelated parent-repository tests. Timed-out commands must not be retried unchanged. The real output and exit code are recorded on the card.');
   lines.push('3. If verification passed, call `fauna_workitem_comment` with a short summary, then `fauna_workitem_move` to column="done". Cards with a verifier configured CANNOT be moved to done without a passing verification — the API will reject it.');
   lines.push('4. If verification failed, fix the failures and re-verify. After 2 failed verifications hand back to a human via `fauna_workitem_update` (assignee="human") + `fauna_workitem_move` column="todo".');
   lines.push('5. If you get blocked or need a decision from the user, call `fauna_workitem_comment` describing the blocker and `fauna_workitem_move` with column="todo" + assignee="human" via `fauna_workitem_update`.');
