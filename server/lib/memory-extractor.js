@@ -278,9 +278,14 @@ export async function extractFacts(opts) {
         proposal.resolvedFactId = r.id;
         applied++;
       } else {
-        proposal.status = 'rejected';
-        proposal.resolvedAt = Date.now();
-        proposal.rejectReason = r.error;
+        if (r.code === 'MEMORY_FULL') {
+          proposal.saveError = r.error;
+          console.warn('[memory-extractor]', r.error);
+        } else {
+          proposal.status = 'rejected';
+          proposal.resolvedAt = Date.now();
+          proposal.rejectReason = r.error;
+        }
         skipped++;
       }
     }

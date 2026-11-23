@@ -10,12 +10,12 @@ import { summarizeHistory } from '../lib/summarize-history.js';
 
 export function registerSummarizeRoutes(app, { getCopilotClient }) {
   app.post('/api/summarize', async (req, res) => {
-    const { messages = [], model: requestedModel } = req.body || {};
+    const { messages = [], model: requestedModel, previousSummary = '' } = req.body || {};
     if (!Array.isArray(messages) || !messages.length) return res.json({ summary: '' });
     const model = requestedModel || 'claude-sonnet-4.6';
     try {
       const client = getCopilotClient();
-      const summary = await summarizeHistory(messages, { client, model });
+      const summary = await summarizeHistory(messages, { client, model, previousSummary });
       res.json({ summary });
     } catch (e) {
       console.error('[summarize] failed:', e && (e.stack || e.message || e));

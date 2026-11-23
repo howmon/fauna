@@ -16,7 +16,7 @@
 //   getInternalAICaller () => async (prompt, model) => string
 
 import os from 'os';
-import { exec as _exec, spawn } from 'child_process';
+import { spawn } from 'child_process';
 
 import { addAutoAllow } from '../../permission-guard.js';
 import {
@@ -25,6 +25,7 @@ import {
   waitForStartup,
 } from '../lib/dev-server-registry.js';
 import { normalizeInteractiveAuthCommand } from '../lib/interactive-auth.js';
+import { runShell, stopShellProcess } from '../lib/shell-runner.js';
 
 export function registerShellExecRoutes(app, {
   shellProcs,
@@ -45,7 +46,7 @@ export function registerShellExecRoutes(app, {
   });
 
   app.post('/api/shell-exec', async (req, res) => {
-    const { command: requestedCommand, cwd, killId, stream } = req.body;
+    const { command: requestedCommand, cwd, killId, stream, conversationId, projectId } = req.body;
     const command = normalizeInteractiveAuthCommand('fauna_shell_exec', { command: requestedCommand }).command;
     if (!command) return res.status(400).json({ error: 'command required' });
 
@@ -72,6 +73,28 @@ export function registerShellExecRoutes(app, {
       // so they show up in the Dev Servers settings page. Killing them at
       // 5min defeats the whole point of the registry.
       const isDev = isDevServerCommand(command);
+      if (!isDev) {
+        const result = await runShell({
+          command, cwd: workDir, env, shellBin, isWin, timeoutMs: 300000,
+          context: { conversationId, projectId, source: 'inline' },
+          maxOutputChars: 10 * 1024 * 1024,
+          registerChild: child => {
+            if (killId) shellProcs.set(killId, child);
+            try { registerDevServer(child, { command, cwd: workDir, killId }); } catch (_) {}
+          },
+          onChunk: (kind, text) => {
+            if (!res.writableEnded) res.write(`data: ${JSON.stringify({ type: kind, text })}\n\n`);
+          },
+        });
+        if (killId) shellProcs.delete(killId);
+        if (!res.writableEnded) {
+          if (result.exitCode === -1) res.write(`data: ${JSON.stringify({ type: 'error', error: result.stderr })}\n\n`);
+          res.write(`data: ${JSON.stringify({ type: 'exit', exitCode: result.exitCode,
+            killed: result.killed, timedOut: result.timedOut })}\n\n`);
+          res.end();
+        }
+        return;
+      }
       const child = spawn(shellBin, isWin ? ['-Command', command] : ['-c', command], {
         cwd: workDir,
         env,
@@ -130,54 +153,18 @@ export function registerShellExecRoutes(app, {
         return;
       }
 
-      if (child.stdout) {
-        child.stdout.on('data', (chunk) => {
-          const text = chunk.toString();
-          res.write(`data: ${JSON.stringify({ type: 'stdout', text })}\n\n`);
-        });
-      }
-
-      if (child.stderr) {
-        child.stderr.on('data', (chunk) => {
-          const text = chunk.toString();
-          res.write(`data: ${JSON.stringify({ type: 'stderr', text })}\n\n`);
-        });
-      }
-
-      child.on('exit', (code) => {
-        if (killId) shellProcs.delete(killId);
-        res.write(`data: ${JSON.stringify({ type: 'exit', exitCode: code || 0 })}\n\n`);
-        res.end();
-      });
-
-      child.on('error', (err) => {
-        res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
-        res.end();
-      });
-
-      if (killId) shellProcs.set(killId, child);
       return;
     }
 
     // Non-streaming mode - wait for completion and return JSON
-    const child = _exec(command, { cwd: workDir, env, timeout: 300000, maxBuffer: 10 * 1024 * 1024, shell: shellBin },
-      (err, stdout, stderr) => {
-        if (killId) shellProcs.delete(killId);
-        if (err?.killed && !stdout && !stderr) {
-          return res.json({ ok: false, exitCode: 130, stdout: '', stderr: 'Process killed by user', command, cwd: workDir, killed: true });
-        }
-        res.json({
-          ok:       !err || err.killed === false && (err.code === 0 || stdout),
-          exitCode: err?.code ?? 0,
-          stdout:   stdout || '',
-          stderr:   stderr || '',
-          command,
-          cwd: workDir,
-        });
-      }
-    );
-    if (killId) shellProcs.set(killId, child);
-    try { registerDevServer(child, { command, cwd: workDir, killId }); } catch (_) {}
+    const result = await runShell({
+      command, cwd: workDir, env, shellBin, isWin, timeoutMs: 300000,
+      context: { conversationId, projectId, source: 'inline' },
+      maxOutputChars: 10 * 1024 * 1024,
+      registerChild: child => { if (killId) shellProcs.set(killId, child); },
+    });
+    if (killId) shellProcs.delete(killId);
+    res.json(result);
   });
 
   app.post('/api/shell-kill', (req, res) => {
@@ -185,7 +172,7 @@ export function registerShellExecRoutes(app, {
     if (!killId) return res.status(400).json({ error: 'killId required' });
     const child = shellProcs.get(killId);
     if (child) {
-      try { child.kill('SIGTERM'); } catch {}
+      stopShellProcess(child);
       shellProcs.delete(killId);
       res.json({ ok: true });
     } else {

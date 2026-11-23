@@ -1,7 +1,6 @@
 // ── Structured Memory Store — Persistent facts with decay and recall scoring ──
 // Complements the existing category/skill memory system.
-// Stores individual facts the AI learns about the user, project preferences,
-// decisions, and context — with automatic decay of unused entries.
+// Stores individual facts, retaining durable entries and expiring stale context.
 //
 // Persists to ~/.config/fauna/facts.json
 
@@ -125,10 +124,8 @@ export function remember(text, catOrOpts) {
     return { ok: true, id: existing.id, deduplicated: true };
   }
 
-  // Enforce limit — remove oldest by lastAccessedAt
   if (facts.length >= MAX_FACTS) {
-    facts.sort((a, b) => (a.lastAccessedAt || a.createdAt) - (b.lastAccessedAt || b.createdAt));
-    facts.splice(0, facts.length - MAX_FACTS + 1);
+    return { ok: false, code: 'MEMORY_FULL', error: `Memory is full (${MAX_FACTS} facts). Delete unwanted facts before saving new ones; existing facts have been preserved.` };
   }
 
   const fact = {
@@ -418,7 +415,7 @@ export function recallHybrid(keywords, queryVec, opts = {}) {
   return scored.map(s => s.fact);
 }
 
-// ── Decay — remove facts not accessed within DECAY_DAYS ──────────────────
+// ── Decay — retain durable facts; expire stale dynamic/superseded entries ──
 
 export function runDecay(maxAgeDays = DECAY_DAYS) {
   const facts = _load();
@@ -428,6 +425,7 @@ export function runDecay(maxAgeDays = DECAY_DAYS) {
   _facts = facts.filter(f => {
     // Temporal facts expire on their own clock, independent of access decay.
     if (f.expiresAt && f.expiresAt <= now) return false;
+    if ((f.kind || 'static') === 'static' && !f.supersededBy) return true;
     // Superseded facts are kept briefly for audit, then decayed normally.
     return (f.lastAccessedAt || f.createdAt) > cutoff;
   });
@@ -494,8 +492,14 @@ export function importFacts(factsArray) {
   if (!Array.isArray(factsArray)) return { ok: false, error: 'Expected array' };
   // Validate and merge
   const existing = _load();
+  const additions = factsArray.filter(f => f && typeof f.text === 'string' && f.text.trim())
+    .filter((f, i, all) => !existing.some(e => _normalize(e.text) === _normalize(f.text))
+      && all.findIndex(other => _normalize(other.text) === _normalize(f.text)) === i);
+  if (existing.length + additions.length > MAX_FACTS) {
+    return { ok: false, code: 'MEMORY_FULL', error: `Import exceeds the ${MAX_FACTS}-fact limit. Existing facts have been preserved.` };
+  }
   let added = 0;
-  for (const f of factsArray) {
+  for (const f of additions) {
     if (!f.text || !f.text.trim()) continue;
     const norm = _normalize(f.text);
     if (existing.some(e => _normalize(e.text) === norm)) continue;
@@ -508,11 +512,6 @@ export function importFacts(factsArray) {
       accessCount: f.accessCount || 0,
     });
     added++;
-  }
-  // Trim to max
-  if (existing.length > MAX_FACTS) {
-    existing.sort((a, b) => (a.lastAccessedAt || a.createdAt) - (b.lastAccessedAt || b.createdAt));
-    existing.splice(0, existing.length - MAX_FACTS);
   }
   _facts = existing;
   _save();

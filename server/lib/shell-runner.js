@@ -9,10 +9,19 @@
 import os from 'os';
 import { spawn } from 'child_process';
 import { isCommandSafe } from '../../permission-guard.js';
+import { testRunRegistry } from './test-run-registry.js';
 
 const DEFAULT_TIMEOUT_MS = 180000;
 const SEARCH_TIMEOUT_MS = 30000;
 const DEFAULT_MAX_OUTPUT_CHARS = 200000; // hard cap per stream
+const shellTerminators = new WeakMap();
+
+export function stopShellProcess(child) {
+  const terminate = shellTerminators.get(child);
+  if (terminate) return terminate();
+  try { child.kill('SIGTERM'); }
+  catch (error) { console.warn('[shell] unable to stop process:', error.message); }
+}
 
 export function isUnboundedRecursiveSearch(command) {
   return /(?:^|[;&|]\s*)(?:grep\s+(?:-[^\s]*[rR][^\s]*\s+|--recursive\b)|find\s+\S+)/i.test(String(command || ''));
@@ -37,6 +46,7 @@ export function runShell({
   onChunk = null,        // (kind: 'stdout'|'stderr', text: string) => void
   registerChild = null,  // (child) => void  — caller uses this to support kill/abort
   signal = null,         // AbortSignal — kills the child if aborted mid-run
+  context = {},
 } = {}) {
   if (!command) return Promise.reject(new Error('command required'));
 
@@ -59,20 +69,58 @@ export function runShell({
     let stderrTruncated = false;
     let killed = false;
     let timedOut = false;
+    let stopping = false;
+    let settled = false;
+    let exitCode = null;
+    let exitSignal = null;
+    let monitorId = null;
 
     const child = spawn(
       shellBin,
       isWin ? ['-Command', command] : ['-c', command],
-      { cwd: workDir, env, stdio: ['pipe', 'pipe', 'pipe'] },
+      { cwd: workDir, env, detached: !isWin, stdio: ['pipe', 'pipe', 'pipe'] },
     );
+
+    const signalTree = (signalName) => {
+      if (!child.pid) return;
+      if (isWin) {
+        const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+        killer.on('error', error => console.warn('[shell] unable to stop process tree:', error.message));
+        killer.on('exit', code => {
+          if (code) console.warn('[shell] taskkill failed for PID', child.pid, 'with exit', code);
+        });
+      } else {
+        try { process.kill(-child.pid, signalName); }
+        catch (error) {
+          if (error.code !== 'ESRCH') console.warn('[shell] unable to stop process group:', error.message);
+        }
+      }
+    };
+    const terminate = () => {
+      if (!timedOut) killed = true;
+      if (stopping) return;
+      stopping = true;
+      testRunRegistry.stopping(monitorId);
+      signalTree('SIGTERM');
+      // Keep this escalation even if the shell exits: grandchildren may
+      // ignore SIGTERM or have redirected their output pipes.
+      setTimeout(() => {
+        signalTree('SIGKILL');
+        child.stdin?.destroy();
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        finish(exitCode ?? 130, exitSignal || 'SIGKILL');
+      }, 1000);
+    };
+    shellTerminators.set(child, terminate);
+    monitorId = testRunRegistry.start({ command, cwd: workDir, pid: child.pid, context, stop: terminate });
 
     if (registerChild) {
       try { registerChild(child); } catch (_) {}
     }
 
     const onAbort = () => {
-      killed = true;
-      try { child.kill('SIGTERM'); } catch (_) {}
+      terminate();
     };
     if (signal) {
       if (signal.aborted) onAbort();
@@ -81,13 +129,14 @@ export function runShell({
 
     const timer = setTimeout(() => {
       timedOut = true;
-      try { child.kill('SIGTERM'); } catch (_) {}
+      terminate();
     }, timeoutMs);
 
     if (child.stdout) {
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', (chunk) => {
         const text = String(chunk);
+        testRunRegistry.append(monitorId, text);
         if (stdout.length < maxOutputChars) {
           const room = maxOutputChars - stdout.length;
           stdout += text.length <= room ? text : text.slice(0, room);
@@ -104,6 +153,7 @@ export function runShell({
       child.stderr.setEncoding('utf8');
       child.stderr.on('data', (chunk) => {
         const text = String(chunk);
+        testRunRegistry.append(monitorId, text);
         if (stderr.length < maxOutputChars) {
           const room = maxOutputChars - stderr.length;
           stderr += text.length <= room ? text : text.slice(0, room);
@@ -118,8 +168,12 @@ export function runShell({
     }
 
     child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       if (signal) signal.removeEventListener?.('abort', onAbort);
+      testRunRegistry.append(monitorId, 'spawn error: ' + err.message);
+      testRunRegistry.finish(monitorId, { ok: false, exitCode: -1, killed, timedOut });
       resolve({
         ok: false,
         exitCode: -1,
@@ -134,13 +188,19 @@ export function runShell({
       });
     });
 
-    child.on('exit', (code, sig) => {
+    const finish = (code, sig) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       if (signal) signal.removeEventListener?.('abort', onAbort);
-      const exitCode = code != null ? code : (sig ? 130 : 0);
+      const resultExitCode = code != null ? code : (sig ? 130 : 0);
+      testRunRegistry.finish(monitorId, {
+        ok: resultExitCode === 0 && !timedOut && !killed,
+        exitCode: resultExitCode, killed, timedOut,
+      });
       resolve({
-        ok: exitCode === 0 && !timedOut && !killed,
-        exitCode,
+        ok: resultExitCode === 0 && !timedOut && !killed,
+        exitCode: resultExitCode,
         stdout,
         stderr,
         command,
@@ -151,6 +211,28 @@ export function runShell({
         stderrTruncated,
         signal: sig || null,
       });
+    };
+    child.on('exit', (code, sig) => {
+      exitCode = code;
+      exitSignal = sig;
+      if (!isWin && !stopping && child.pid) {
+        try {
+          process.kill(-child.pid, 0);
+          const warning = '\nShell exited with child processes still running; Fauna is stopping the remaining process tree. Use managed dev servers for persistent services.\n';
+          stderr += warning;
+          testRunRegistry.append(monitorId, warning);
+          terminate();
+        } catch (error) {
+          if (error.code !== 'ESRCH') {
+            console.warn('[shell] unable to check remaining process group:', error.message);
+            terminate();
+          }
+        }
+      }
+    });
+    child.on('close', (code, sig) => {
+      shellTerminators.delete(child);
+      finish(code, sig);
     });
   });
 }

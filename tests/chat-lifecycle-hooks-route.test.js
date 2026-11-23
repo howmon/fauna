@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { registerChatRoute } from '../server/routes/chat.js';
 import { createRunStore } from '../server/lib/run-store.js';
+import { createConversationStore } from '../server/lib/conversation-store.js';
 import * as shellRunner from '../server/lib/shell-runner.js';
 
 const llm = vi.hoisted(() => ({ create: vi.fn(), supportsTools: false }));
@@ -148,6 +149,88 @@ describe('POST /api/chat lifecycle hooks', () => {
     steps: [{ action: 'click', selector: '#submit' },
       { action: 'assert', selector: '#outcome', property: 'text', expected: 'After' }],
   };
+
+  it.each(['before-stream', 'during-stream'])('cleans up cancellation %s without an uncaught scope error', async phase => {
+    vi.spyOn(os, 'homedir').mockReturnValue(workspaceRoot);
+    const runStore = createRunStore({ configDir: workspaceRoot });
+    registerChatRoute(app, { ...makeDeps(workspaceRoot), runStore });
+    let activeRunId;
+    const cancel = () => {
+      runStore.enqueueControl(activeRunId, 'cancel');
+      throw new Error('Request aborted');
+    };
+    llm.create.mockImplementation(async () => {
+      if (phase === 'before-stream') cancel();
+      return (async function* () {
+        yield { choices: [{ delta: { content: 'Restored context' }, finish_reason: null }] };
+        cancel();
+      })();
+    });
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'Explain the old conversation' }], noTools: true,
+        projectId: 'history-project' },
+      onEvent: event => { if (event.type === 'run_started') activeRunId = event.runId; },
+    });
+    expect(res.writableEnded).toBe(true);
+    expect(runStore.get(activeRunId)).toMatchObject({ status: 'cancelled' });
+    expect(parseSse(res.chunks).filter(event => event.type === 'error')).toEqual([]);
+    mockTextStream('The next request still works.');
+    const next = await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'Explain the exports' }], noTools: true },
+    });
+    expect(next.writableEnded).toBe(true);
+    expect(parseSse(next.chunks).some(event => event.type === 'content' &&
+      event.content?.includes('next request still works'))).toBe(true);
+  });
+
+  it('persists late summaries after SSE closes and uses them on the next request', async () => {
+    const conversationStore = createConversationStore({ configDir: workspaceRoot, mode: 'split-only' });
+    await conversationStore.put('summary-test', {
+      messages: [], contextSummary: 'Original task: preserve evidence.', contextSummaryUpdatedAt: 1,
+    });
+    app = makeFakeApp();
+    registerChatRoute(app, { ...makeDeps(workspaceRoot), conversationStore });
+    let resolveSummary;
+    llm.create.mockImplementation(async params => {
+      if (params.stream === false) return new Promise(resolve => { resolveSummary = resolve; });
+      return mockStopStream('The module exports a helper.');
+    });
+    const messages = Array.from({ length: 6 }, (_, i) => ({
+      role: i % 2 ? 'assistant' : 'user', content: 'Explain module ' + i,
+    }));
+    const res = await app.invoke('POST', '/api/chat', {
+      body: { messages, noTools: true, conversationId: 'summary-test' },
+    });
+    expect(res.writableEnded).toBe(true);
+    expect(resolveSummary).toBeTypeOf('function');
+    const summary = 'Original task: preserve evidence. Observed tests: 15 passed, exit 0. Browser check remains pending.';
+    resolveSummary({ choices: [{ message: { content: summary } }] });
+    await vi.waitFor(async () => {
+      expect((await conversationStore.get('summary-test')).contextSummary).toBe(summary);
+    });
+    const reloaded = createConversationStore({ configDir: workspaceRoot, mode: 'split-only' });
+    expect((await reloaded.get('summary-test')).contextSummary).toBe(summary);
+    mockTextStream('Here is the explanation.');
+    await app.invoke('POST', '/api/chat', {
+      body: { messages: [{ role: 'user', content: 'Explain the exports.' }], noTools: true,
+        conversationId: 'summary-test', contextSummary: 'Stale context', contextSummaryUpdatedAt: 1 },
+    });
+    const mainCall = llm.create.mock.calls.at(-1)[0];
+    expect(mainCall.messages[0].content).toContain(summary);
+  });
+
+  it('blocks a failed compaction instead of silently dropping earlier history', async () => {
+    llm.create.mockResolvedValue({ choices: [{ message: { content: '' } }] });
+    const messages = Array.from({ length: 90 }, (_, i) => ({
+      role: i % 2 ? 'assistant' : 'user', content: 'Explain the module. ' + 'x'.repeat(8000),
+    }));
+    const res = await app.invoke('POST', '/api/chat', { body: { messages, noTools: true } });
+    expect(parseSse(res.chunks).find(event => event.type === 'task_result')).toMatchObject({
+      status: 'BLOCKED', content: expect.stringContaining('earlier history was preserved'),
+    });
+    expect(messages).toHaveLength(90);
+    expect(llm.create).toHaveBeenCalledTimes(1);
+  });
 
   it.each([false, true])('blocks UI completion without executed journeys, noTools=%s', async noTools => {
     llm.supportsTools = !noTools;
@@ -405,6 +488,64 @@ describe('POST /api/chat lifecycle hooks', () => {
     expect(events.some(event => event.type === 'content' && /BLOCKED:/.test(event.content))).toBe(true);
   });
 
+  it('recovers implementation intent and architecture choices on a compacted continuation', async () => {
+    llm.supportsTools = true;
+    const conversationStore = createConversationStore({ configDir: workspaceRoot });
+    const goal = 'Implement scenario generation without requiring Span.';
+    const choice = 'Use GitHub Copilot CLI authentication, including a native companion if needed.';
+    await conversationStore.put('compacted-task', {
+      archivedMessages: [{ role: 'user', content: goal }, { role: 'user', content: choice }],
+      messages: [{ role: 'assistant', content: 'I will implement a Span bridge instead.' }],
+      contextSummary: 'The assistant proposed using Span.',
+    });
+    registerChatRoute(app, { ...makeDeps(workspaceRoot), conversationStore });
+    write(path.join(workspaceRoot, 'target.js'), 'export const value = 1;\n');
+    llm.create
+      .mockResolvedValueOnce(mockToolCallStream('fauna_read_file', { path: path.join(workspaceRoot, 'target.js') }))
+      .mockResolvedValueOnce(mockStopStream('I inspected the file and will implement the bridge later.'))
+      .mockResolvedValueOnce(mockStopStream('BLOCKED: no safe edit is available.'))
+      .mockResolvedValueOnce({ choices: [] });
+    await app.invoke('POST', '/api/chat', {
+      body: { conversationId: 'compacted-task', messages: [{ role: 'user', content: 'continue' }], clientContext: 'test' },
+    });
+    const modelCalls = llm.create.mock.calls.filter(([params]) => params.stream);
+    expect(modelCalls).toHaveLength(3);
+    expect(modelCalls[0][0].tools.some(tool => tool.function?.name === 'fauna_write_file')).toBe(true);
+    for (const [params] of modelCalls) {
+      const requirements = params.messages.find(message => message.name === 'task_requirements');
+      expect(requirements.role).toBe('user');
+      expect(requirements.content).toContain(goal);
+      expect(requirements.content).toContain(choice);
+      expect(requirements.content).not.toContain('implement a Span bridge instead');
+    }
+    expect(modelCalls[2][0].messages.some(message =>
+      message.role === 'user' && message.content.includes('made no concrete mutation')
+    )).toBe(true);
+  });
+
+  it('keeps an earlier authentication choice outside the trimmed body without changing a read-only request', async () => {
+    const choice = 'Use GitHub Copilot CLI authentication without requiring Span.';
+    mockTextStream('Here is the provider code.');
+    await app.invoke('POST', '/api/chat', {
+      body: {
+        messages: [
+          { role: 'user', content: 'Implement the extension.' },
+          { role: 'assistant', content: 'Choose an authentication method.' },
+          { role: 'user', content: choice },
+          { role: 'assistant', content: 'I inspected the files.' },
+          { role: 'user', content: 'continue' },
+          { role: 'assistant', content: 'I proposed a Span bridge.' },
+          { role: 'user', content: 'Show the provider code' },
+        ],
+        maxContextTurns: 2, noTools: true, clientContext: 'test',
+      },
+    });
+    expect(llm.create).toHaveBeenCalledTimes(1);
+    const sent = llm.create.mock.calls[0][0].messages;
+    expect(sent.find(message => message.name === 'task_requirements').content).toContain(choice);
+    expect(sent.some(message => message.role === 'user' && message.content === choice)).toBe(false);
+    expect(sent.some(message => message.role === 'user' && message.content === 'Show the provider code')).toBe(true);
+  });
   it('treats a remove request as implementation instead of accepting a proposal', async () => {
     llm.supportsTools = true;
     write(path.join(workspaceRoot, 'sidebar.css'), '.sidebar { display: block; }\n');
@@ -617,6 +758,46 @@ describe('POST /api/chat lifecycle hooks', () => {
       ].join('\n'));
     }
 
+    it.each([
+      'command -v copilot || command -v gh || true; (copilot --version 2>/dev/null || gh copilot --version 2>/dev/null || true)',
+      "printf '%s\\n' '--- bridge listener ---'; lsof -nP -iTCP:3767 -sTCP:LISTEN || true; curl -sS -D /tmp/copilot-headers.txt -H 'Origin: chrome-extension://span-eval-test' http://127.0.0.1:3767/models -o /tmp/copilot-models.json; cat /tmp/copilot-headers.txt 2>/dev/null || true; cat /tmp/copilot-models.json 2>/dev/null || true",
+      'copilot --help 2>&1',
+    ])('does not launch project tests after the diagnostic command %s', async command => {
+      llm.supportsTools = true;
+      seedCompletionTests();
+      const execute = vi.spyOn(shellRunner, 'runShell').mockImplementation(async options => ({
+        ok: true, exitCode: 0, stdout: 'Model discovery returned 20 models.', stderr: '',
+        command: options.command, cwd: options.cwd, killed: false, timedOut: false,
+      }));
+      llm.create
+        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { command, cwd: workspaceRoot }))
+        .mockResolvedValueOnce(mockStopStream('Model discovery returned 20 models.'))
+        .mockResolvedValue(mockStopStream('BLOCKED: unexpected project verification.'));
+      const res = await app.invoke('POST', '/api/chat', {
+        body: { messages: [{ role: 'user', content: 'Test Copilot model discovery' }], clientContext: 'test' },
+      });
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(llm.create).toHaveBeenCalledTimes(2);
+      expect(parseSse(res.chunks).some(event => event.type === 'tool_call' && event.name === 'autonomous_qa_gate')).toBe(false);
+      expect(parseSse(res.chunks).some(event => event.type === 'error')).toBe(false);
+    });
+
+    it('still verifies a project file write when diagnostic output is discarded', async () => {
+      llm.supportsTools = true;
+      seedCompletionTests();
+      llm.create
+        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', {
+          command: 'printf fixed > changed.js 2>/dev/null', cwd: workspaceRoot,
+        }))
+        .mockResolvedValueOnce(mockStopStream('Implemented the change.'))
+        .mockResolvedValueOnce(mockStopStream('Completed after the tests passed.'));
+      const res = await app.invoke('POST', '/api/chat', {
+        body: { messages: [{ role: 'user', content: 'fix the code' }], clientContext: 'test' },
+      });
+      expect(fs.readFileSync(path.join(workspaceRoot, 'verification-runs.txt'), 'utf8')).toBe('1\n');
+      expect(parseSse(res.chunks).find(event => event.type === 'tool_result' && event.name === 'autonomous_qa_gate')).toBeDefined();
+    });
+
     it('keeps a changed subpackage scoped and reuses its successful post-edit tests', async () => {
       llm.supportsTools = true;
       const nested = path.join(workspaceRoot, 'extensions', 'eval');
@@ -638,7 +819,7 @@ describe('POST /api/chat lifecycle hooks', () => {
           patch: '*** Begin Patch\n*** Update File: extensions/eval/changed.js\n@@\n-broken\n+fixed\n*** End Patch',
         }))
         .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { cwd: nested, command: 'npm test' }))
-        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { cwd: workspaceRoot, command: 'pwd' }))
+        .mockResolvedValueOnce(mockToolCallStream('fauna_shell_exec', { cwd: workspaceRoot, command: 'pwd 2>/dev/null' }))
         .mockResolvedValueOnce(mockStopStream('Implemented the package change.'))
         .mockResolvedValueOnce(mockStopStream('Completed after the package tests passed.'));
       const res = await app.invoke('POST', '/api/chat', {

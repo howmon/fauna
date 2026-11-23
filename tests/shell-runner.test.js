@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { runShell, formatShellResultForLLM, isCommandSafe, effectiveShellTimeout, isUnboundedRecursiveSearch } from '../server/lib/shell-runner.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { runShell, stopShellProcess, formatShellResultForLLM, isCommandSafe, effectiveShellTimeout, isUnboundedRecursiveSearch } from '../server/lib/shell-runner.js';
+import { registerShellExecRoutes } from '../server/routes/shell-exec.js';
 
 const SHELL_BIN = process.platform === 'win32' ? 'powershell.exe' : '/bin/zsh';
 const IS_WIN = process.platform === 'win32';
@@ -89,6 +93,51 @@ describe('shell-runner', () => {
       expect(result.ok).toBe(false);
     });
 
+    it.skipIf(IS_WIN).each(['timeout', 'abort', 'stop', 'shell-exit'])(
+      'terminates SIGTERM-resistant descendants after %s', async mode => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fauna-process-tree-'));
+        const pidFile = path.join(dir, 'worker.pid');
+        let workerPid;
+        try {
+          fs.writeFileSync(path.join(dir, 'worker.cjs'),
+            "process.on('SIGTERM', () => {}); require('fs').writeFileSync('worker.pid', String(process.pid)); console.log('ready'); setInterval(() => {}, 1000);\n");
+          fs.writeFileSync(path.join(dir, 'parent.cjs'),
+            "process.on('SIGTERM', () => {}); require('child_process').spawn(process.execPath, ['worker.cjs'], { stdio: 'inherit' }); setInterval(() => {}, 1000);\n");
+          const node = "'" + process.execPath.replace(/'/g, "'\\''") + "'";
+          const controller = new AbortController();
+          let shell;
+          const result = await runShell({
+            command: mode === 'shell-exit'
+              ? node + " worker.cjs >/dev/null & while [ ! -s worker.pid ]; do sleep 0.02; done; exit 0"
+              : node + ' parent.cjs',
+            cwd: dir, shellBin: SHELL_BIN, isWin: IS_WIN,
+            timeoutMs: mode === 'timeout' ? 1000 : 5000,
+            signal: controller.signal,
+            registerChild: child => { shell = child; },
+            onChunk: (_kind, text) => {
+              if (!text.includes('ready')) return;
+              if (mode === 'abort') controller.abort();
+              if (mode === 'stop') stopShellProcess(shell);
+            },
+          });
+          workerPid = Number(fs.readFileSync(pidFile, 'utf8'));
+          expect(result.ok).toBe(false);
+          expect(result.timedOut).toBe(mode === 'timeout');
+          if (mode === 'shell-exit') expect(result.stderr).toContain('child processes still running');
+          await vi.waitFor(() => {
+            expect(() => process.kill(workerPid, 0)).toThrow();
+          }, { timeout: 3000, interval: 25 });
+        } finally {
+          if (!workerPid && fs.existsSync(pidFile)) workerPid = Number(fs.readFileSync(pidFile, 'utf8'));
+          if (workerPid) {
+            try { process.kill(workerPid, 'SIGKILL'); }
+            catch (error) { if (error.code !== 'ESRCH') throw error; }
+          }
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      }, 8000,
+    );
+
     it('truncates output beyond maxOutputChars', async () => {
       const result = await runShell({
         // emit a large stdout
@@ -134,6 +183,38 @@ describe('shell-runner', () => {
       expect(out).toContain('exit=0');
       expect(out).toContain('--- stdout ---');
       expect(out).toContain('hi');
+    });
+
+    describe('inline shell Stop route', () => {
+      it.each([false, true])('stops a managed command and reports failure with stream=%s', async stream => {
+        const routes = new Map();
+        const shellProcs = new Map();
+        registerShellExecRoutes({ post: (url, handler) => routes.set(url, handler) }, {
+          shellProcs, shellBin: SHELL_BIN, isWin: IS_WIN, augmentedPath: process.env.PATH,
+        });
+        const res = {
+          chunks: [], writableEnded: false,
+          setHeader() {}, flushHeaders() {},
+          write(chunk) { this.chunks.push(chunk); },
+          end() { this.writableEnded = true; },
+          json(body) { this.body = body; },
+        };
+        const pending = routes.get('/api/shell-exec')({
+          body: { command: IS_WIN ? 'Start-Sleep -Seconds 30' : 'sleep 30', killId: 'managed', stream },
+        }, res);
+        await vi.waitFor(() => expect(shellProcs.has('managed')).toBe(true));
+        const stopResponse = { json: vi.fn() };
+        routes.get('/api/shell-kill')({ body: { killId: 'managed' } }, stopResponse);
+        await pending;
+        expect(stopResponse.json).toHaveBeenCalledWith({ ok: true });
+        expect(shellProcs.size).toBe(0);
+        if (stream) {
+          expect(res.writableEnded).toBe(true);
+          expect(res.chunks.join('')).toContain('"killed":true');
+        } else {
+          expect(res.body).toMatchObject({ ok: false, killed: true });
+        }
+      });
     });
 
     it('surfaces killed / timed_out / truncated flags', () => {

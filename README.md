@@ -18,11 +18,17 @@ Copilot models that require the Responses API (including GPT-5.6 and GPT-6 varia
 
 **Shell** — `bash`, `python3`, `node`, `swift`, `osascript`, PowerShell. Streaming stdout/stderr, cancel via Stop, auto-attached screenshots.
 
+Shell timeouts and Stop terminate the command's process tree, with forced termination after a one-second grace period. On macOS/Linux, child processes left running after a shell exits are also stopped and reported as a failed command; use Fauna's managed dev-server flow for persistent services. Chat, inline shell execution, and Kanban verification share this cleanup.
+
 **Browser** — Built-in multi-tab pane plus headless `fauna_browser` with stealth (uses your real Edge profile): navigate / click / type / extract / evaluate / screenshot.
 
 **Files** — `fauna_read_file`, `fauna_replace_string` (exact match), `fauna_apply_patch` (multi-file diffs), `fauna_write_file(s)` (atomic, `minLines` / `sha256` guards). Auto-recovery checkpoints.
 
 **Memory & RAG** — Hybrid lexical + semantic recall over remembered facts and ingested documents, with project/tag scoping and an allowlist pre-filter for two-stage retrieval. Optional TurboQuant embedding quantization shrinks stored vectors ~6× (4-bit) / ~12× (2-bit) with near-lossless ranking — off by default, see Setup.
+
+Conversation summaries carry earlier task context and tool evidence forward and persist server-side after streams close. Durable facts are not aged out; the 200-fact limit rejects new writes explicitly rather than evicting saved facts, with automatic extraction retaining pending proposals.
+
+Opening a saved conversation renders its latest 20 messages. Earlier and archived messages load in pages of 20 without modifying stored history. Pending history loads stop when you switch chats; malformed messages show an error without preventing the rest of the conversation from opening.
 
 **Figma** — Dev Mode MCP (port 3845) + Plugin API via `figma_execute`. Full A11y design-spec generation against design-system components.
 
@@ -51,6 +57,12 @@ Copilot models that require the Responses API (including GPT-5.6 and GPT-6 varia
 **Kanban / Autopilot** — Project board where cards drive AI runs end-to-end with retries, comments, and work-item verification. Native + widget-panel alerts on completion / failure / out-of-retries. Live SSE stream at `/api/board/stream`.
 
 **Test-backed completion** — Chat coding changes and Kanban runs execute existing project tests before accepting completion. Kanban uses `card.verifyCommand`, then `project.qa.command`, then detected tests (`test:ci`, `test:unit`, `test`, installed Vitest, or pytest). Chat uses project/task QA or the same detected tests. Tests run outside watch mode with `CI=1`; output and exit codes appear in the activity stream. Later file edits invalidate a pass. Failures are fed back for repair and rechecking; repeated failures block completion. Kanban cards without a verifier, or with a failed/crashed verifier, stay in Review rather than automatically becoming Done. Humans can still override board status. Documentation-only and conversational turns do not need tests.
+
+Diagnostic shell output discarded to `/dev/null` or forwarded between file descriptors (for example `2>/dev/null` or `2>&1`) does not count as a code edit or trigger automatic project tests. Actual project-file writes still invalidate verification and require a fresh check, including commands that also discard diagnostic output.
+
+**Task fidelity** — Chat retains a bounded, verbatim set of recent user requests from active and archived history, separately from AI summaries and assistant plans. Continuations recover the original implementation intent; a new read-only request does not inherit it. Newer explicit user instructions can change the approach, but existing code, assistant proposals, and passing tests are not approval to replace a requested architecture or introduce an excluded dependency.
+
+**Running tests** — Open **Tests** in the top bar to inspect test commands started by Fauna's chat, inline shell, or Kanban verifier in the current app session. The panel shows the command, working directory, elapsed time, live stdout/stderr, exit status, and process-tree resident RAM. **Stop** terminates the owned process tree. Uncheck **Tests only** to inspect other commands. Output refreshes every two seconds while visible, retains a bounded recent tail, and can appear delayed when a runner buffers output or redirects it to a file. The monitor retains the 20 most recently finished commands, does not adopt external or previous-session processes, and labels resident memory separately from Activity Monitor's footprint, compressed memory, or swap. Monitor APIs require the local desktop UI nonce.
 
 Auto-detection uses the nearest package containing the changed files, or the card's `fileScope`, rather than unrelated parent-repository tests. Changes across packages use their common package root. Explicit project QA still runs at the project root. Matching successful post-edit checks are reused within the run. A timed-out check blocks automatic completion immediately and cannot be retried unchanged in the same turn/run; change the code, narrow the check, or report the blocker instead.
 

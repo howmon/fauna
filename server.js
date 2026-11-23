@@ -85,6 +85,7 @@ import { primeTokenizer } from './server/lib/token-budget.js';
 import { registerGitRoutes } from './server/routes/git.js';
 import { registerBrowseRoutes } from './server/bridges/playwright-browse.js';
 import { registerShellExecRoutes } from './server/routes/shell-exec.js';
+import { registerTestRunRoutes } from './server/routes/test-runs.js';
 import { registerDevServerRoutes } from './server/routes/dev-servers.js';
 import * as _devServerRegistry from './server/lib/dev-server-registry.js';
 import { registerAgentSandboxFileRoutes } from './server/routes/agent-sandbox-files.js';
@@ -532,6 +533,7 @@ registerTestRoutes(app, {
 registerGitRoutes(app, { augmentedPath: AUGMENTED_PATH, shellBin: SHELL_BIN });
 
 // ── Shell execution routes moved → server/routes/shell-exec.js ──
+registerTestRunRoutes(app);
 registerShellExecRoutes(app, {
   shellProcs: _shellProcs,
   augmentedPath: AUGMENTED_PATH,
@@ -593,6 +595,7 @@ const playwrightMcp = registerPlaywrightMcpRoutes(app, {
   runtimeDir: FAUNA_CONFIG_DIR,
 });
 registerChatRoute(app, {
+  conversationStore: _sharedConversationStore,
   figma,
   customMcp,
   agentsDir: AGENTS_DIR,

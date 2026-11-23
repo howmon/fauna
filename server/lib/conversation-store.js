@@ -68,6 +68,15 @@ function _validate(conv) {
   }
 }
 
+function mergeConversation(existing, incoming, id) {
+  const merged = { ...existing, ...incoming, id };
+  if ((existing?.contextSummaryUpdatedAt || 0) > (incoming.contextSummaryUpdatedAt || 0)) {
+    merged.contextSummary = existing.contextSummary;
+    merged.contextSummaryUpdatedAt = existing.contextSummaryUpdatedAt;
+  }
+  return merged;
+}
+
 // ── Per-id mutex ──────────────────────────────────────────────────────────
 // Each id gets a tail Promise. New writes chain off the tail; the entry is
 // pruned when no work is pending so the map can't leak.
@@ -161,7 +170,7 @@ function createLegacyBackend({ configDir }) {
       return fileMutex('__file__', async () => {
         const all = _readAll();
         const idx = all.findIndex(c => c.id === id);
-        const merged = idx >= 0 ? { ...all[idx], ...conv, id } : { ...conv, id };
+        const merged = mergeConversation(idx >= 0 ? all[idx] : null, conv, id);
         if (!merged.createdAt) merged.createdAt = Date.now();
         merged.updatedAt = conv.updatedAt || Date.now();
         if (idx >= 0) all[idx] = merged; else all.push(merged);
@@ -248,7 +257,7 @@ function createSplitBackend({ configDir, legacyDualWrite = null }) {
       _validate(conv);
       const merged = await idMutex(id, async () => {
         const existing = _readBody(id);
-        const out = existing ? { ...existing, ...conv, id } : { ...conv, id };
+        const out = mergeConversation(existing, conv, id);
         if (!out.createdAt) out.createdAt = Date.now();
         out.updatedAt = conv.updatedAt || Date.now();
         await atomicWriteJson(_bodyPath(id), out);

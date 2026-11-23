@@ -1413,7 +1413,8 @@ async function runShellExec(execId, opts) {
         if (firstLocal) shellCwd = firstLocal.path;
       }
     }
-    var bodyObj = { command: code, killId: killId, stream: true };
+    var bodyObj = { command: code, killId: killId, stream: true,
+      conversationId: convId2, projectId: (getConv(convId2) || {}).projectId || null };
     // Bypass permissions if settings toggle is on, session-allow-all is active, or re-running after approval
     if (state.bypassCommandPermissions || state._sessionAllowAllCommands || opts._bypassPermissions) {
       bodyObj.bypassPermissions = true;

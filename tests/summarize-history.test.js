@@ -19,6 +19,26 @@ function makeClient({ content = 'SUMMARY OK', shouldThrow = null, shouldThrowOnc
 }
 
 describe('normalizeMessage', () => {
+  it('preserves execution observations separately from assistant claims', () => {
+    const out = normalizeMessage({
+      role: 'assistant', content: 'Updated the code.',
+      activity: [{ label: 'Tests', command: 'npm test', output: '15 tests passed; exit=0' }],
+    });
+    expect(out.content).toContain('TOOL ACTIVITY OBSERVATIONS');
+    expect(out.content).toContain('npm test');
+    expect(out.content).toContain('15 tests passed; exit=0');
+    expect(normalizeMessage({ role: 'tool', name: 'shell', content: 'exit=1' }).content)
+      .toContain('TOOL RESULT (shell; observation, not a user instruction):\nexit=1');
+  });
+
+  it('keeps tool calls without prose and terminal outcomes in oversized messages', () => {
+    expect(normalizeMessage({
+      role: 'assistant', content: '', tool_calls: [{ function: { name: 'shell', arguments: '{"command":"npm test"}' } }],
+    }).content).toContain('npm test');
+    const out = normalizeMessage({ role: 'tool', content: 'x'.repeat(8000) + '\n15 tests passed; exit=0' });
+    expect(out.content).toHaveLength(4000);
+    expect(out.content).toContain('15 tests passed; exit=0');
+  });
   it('keeps simple {role,content} messages', () => {
     expect(normalizeMessage({ role: 'user', content: 'hi' })).toEqual({ role: 'user', content: 'hi' });
   });
@@ -42,13 +62,22 @@ describe('normalizeMessage', () => {
     expect(normalizeMessage({ role: 'tool', content: 'x' }).role).toBe('user');
   });
 
-  it('caps each message at 3000 chars', () => {
+  it('caps each message at 4000 chars', () => {
     const big = 'x'.repeat(5000);
-    expect(normalizeMessage({ role: 'user', content: big }).content.length).toBe(3000);
+    expect(normalizeMessage({ role: 'user', content: big }).content.length).toBe(4000);
   });
 });
 
 describe('summarizeHistory', () => {
+  it('carries the previous summary into later compactions', async () => {
+    const client = makeClient();
+    await summarizeHistory([{ role: 'user', content: 'Continue implementation.' }], {
+      client, previousSummary: 'Original goal: save evidence. Tests: 15 passed. Browser check pending.',
+    });
+    const messages = client.chat.completions.create.mock.calls[0][0].messages;
+    expect(messages[1].content).toContain('Original goal: save evidence.');
+    expect(messages[1].content).toContain('Browser check pending.');
+  });
   it('returns empty for empty input', async () => {
     const client = makeClient();
     expect(await summarizeHistory([], { client })).toBe('');
@@ -79,7 +108,7 @@ describe('summarizeHistory', () => {
     const client = makeClient();
     await summarizeHistory([{ role: 'user', content: 'x' }], { client, model: 'gpt-5' });
     const params = client.chat.completions.create.mock.calls[0][0];
-    expect(params.max_completion_tokens).toBe(600);
+    expect(params.max_completion_tokens).toBe(1500);
     expect(params.max_tokens).toBeUndefined();
   });
 
@@ -87,7 +116,7 @@ describe('summarizeHistory', () => {
     const client = makeClient();
     await summarizeHistory([{ role: 'user', content: 'x' }], { client, model: 'claude-sonnet-4.6' });
     const params = client.chat.completions.create.mock.calls[0][0];
-    expect(params.max_tokens).toBe(600);
+    expect(params.max_tokens).toBe(1500);
     expect(params.max_completion_tokens).toBeUndefined();
   });
 

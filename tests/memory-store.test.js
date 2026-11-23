@@ -16,11 +16,15 @@ vi.mock('fs', async () => {
       ...actual,
       readFileSync: vi.fn(() => JSON.stringify([])),
       writeFileSync: vi.fn(),
+      renameSync: vi.fn(),
+      unlinkSync: vi.fn(),
       mkdirSync: vi.fn(),
       existsSync: vi.fn(() => true),
     },
     readFileSync: vi.fn(() => JSON.stringify([])),
     writeFileSync: vi.fn(),
+    renameSync: vi.fn(),
+    unlinkSync: vi.fn(),
     mkdirSync: vi.fn(),
     existsSync: vi.fn(() => true),
   };
@@ -45,6 +49,13 @@ describe('memory-store', () => {
   });
 
   describe('remember()', () => {
+    it('rejects a full-store write without evicting existing facts', () => {
+      for (let i = 0; i < getStats().maxFacts; i++) remember('Stored fact ' + i);
+      const before = exportFacts().map(f => f.id);
+      expect(remember('One more fact')).toMatchObject({ ok: false, code: 'MEMORY_FULL' });
+      expect(exportFacts().map(f => f.id)).toEqual(before);
+      expect(remember('Stored fact 0')).toMatchObject({ ok: true, deduplicated: true });
+    });
     it('stores a fact and returns ok', () => {
       const result = remember('The sky is blue');
       expect(result.ok).toBe(true);
@@ -129,6 +140,17 @@ describe('memory-store', () => {
   });
 
   describe('runDecay()', () => {
+    it('retains durable facts while removing stale dynamic and expired temporal facts', () => {
+      remember('Durable preference', { kind: 'static' });
+      remember('Temporary debugging activity', { kind: 'dynamic' });
+      remember('Expired event', { kind: 'temporal', expiresAt: Date.now() - 1000 });
+      for (const fact of exportFacts()) {
+        fact.createdAt = Date.now() - 90 * 86400000;
+        fact.lastAccessedAt = fact.createdAt;
+      }
+      expect(runDecay()).toMatchObject({ removed: 2, remaining: 1 });
+      expect(exportFacts()[0].text).toBe('Durable preference');
+    });
     it('removes old facts beyond maxAgeDays', () => {
       remember('Old fact');
       // Manually adjust timestamps — need to access internal state
@@ -162,6 +184,13 @@ describe('memory-store', () => {
   });
 
   describe('exportFacts() / importFacts()', () => {
+    it('rejects an oversized import atomically without dropping saved facts', () => {
+      remember('Existing fact');
+      const before = exportFacts().map(f => f.id);
+      const incoming = Array.from({ length: getStats().maxFacts }, (_, i) => ({ text: 'Imported fact ' + i }));
+      expect(importFacts(incoming)).toMatchObject({ ok: false, code: 'MEMORY_FULL' });
+      expect(exportFacts().map(f => f.id)).toEqual(before);
+    });
     it('round-trips facts through export/import', () => {
       remember('Export test fact');
       const exported = exportFacts();

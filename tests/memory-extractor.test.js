@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+const memoryFiles = vi.hoisted(() => new Map());
 // Mock fs BEFORE importing the modules under test so the in-memory cache
 // starts empty and writes don't touch disk.
 vi.mock('fs', async () => {
   const actual = await vi.importActual('fs');
-  const memFs = { files: new Map() };
+  const memFs = { files: memoryFiles };
   return {
     ...actual,
     default: {
@@ -14,23 +15,31 @@ vi.mock('fs', async () => {
         throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       }),
       writeFileSync: vi.fn((p, data) => { memFs.files.set(p, data); }),
+      renameSync: vi.fn((from, to) => {
+        memFs.files.set(to, memFs.files.get(from));
+        memFs.files.delete(from);
+      }),
+      unlinkSync: vi.fn(p => { memFs.files.delete(p); }),
       mkdirSync: vi.fn(),
       existsSync: vi.fn((p) => memFs.files.has(p)),
     },
     readFileSync: vi.fn(() => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); }),
     writeFileSync: vi.fn(),
+    renameSync: vi.fn(),
+    unlinkSync: vi.fn(),
     mkdirSync: vi.fn(),
     existsSync: vi.fn(() => false),
   };
 });
 
-const { _resetCache, listFacts, projectContainerTag } = await import('../memory-store.js');
+const { _resetCache, listFacts, projectContainerTag, remember, forget, getStats } = await import('../memory-store.js');
 const {
   extractFacts, listProposals, approveProposal, rejectProposal,
   getProposalStats, _resetProposalsCache, _internals,
 } = await import('../server/lib/memory-extractor.js');
 
 beforeEach(() => {
+  memoryFiles.clear();
   _resetCache();
   _resetProposalsCache();
   vi.clearAllMocks();
@@ -38,6 +47,27 @@ beforeEach(() => {
 
 describe('memory-extractor', () => {
   describe('extractFacts()', () => {
+    it('keeps full-store proposals pending so they can be approved after space is freed', async () => {
+      let first;
+      for (let i = 0; i < getStats().maxFacts; i++) {
+        const result = remember('Reserved fact ' + i);
+        if (i === 0) first = result.id;
+      }
+      const r = await extractFacts({
+        messages: [{ role: 'user', content: 'Use TypeScript.' }, { role: 'assistant', content: 'Noted.' }],
+        projectId: 'proj-new',
+        aiCaller: vi.fn().mockResolvedValue(JSON.stringify({
+          facts: [{ text: 'Project prefers TypeScript', category: 'preference', kind: 'static' }],
+        })),
+      });
+      expect(r.applied).toBe(0);
+      expect(r.proposals[0]).toMatchObject({ status: 'pending', saveError: expect.stringContaining('Memory is full') });
+      expect(listFacts()).toHaveLength(getStats().maxFacts);
+      forget(first);
+      expect(approveProposal(r.proposals[0].id)).toMatchObject({ ok: true });
+      expect(listFacts({ containerTag: projectContainerTag('proj-new'), includeGlobal: false })[0].text)
+        .toBe('Project prefers TypeScript');
+    });
     it('returns empty when no aiCaller provided', async () => {
       const r = await extractFacts({ messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }] });
       expect(r.proposals).toHaveLength(0);

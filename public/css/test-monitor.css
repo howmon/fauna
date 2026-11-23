@@ -1,0 +1,88 @@
+.test-monitor-panel {
+  position: fixed;
+  top: 76px;
+  right: 16px;
+  z-index: 12050;
+  width: min(960px, calc(100vw - 32px));
+  max-height: calc(100vh - 96px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--fau-surface);
+  color: var(--fau-text);
+  border: 1px solid var(--fau-border);
+  border-radius: 10px;
+  font-family: var(--font);
+}
+.test-monitor-header, .test-monitor-toolbar, .test-monitor-process {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+}
+.test-monitor-header { border-bottom: 1px solid var(--fau-border); }
+.test-monitor-header h2 { flex: 1; margin: 0; font-size: 15px; }
+.test-monitor-toolbar, .test-monitor-panel footer { font-size: 12px; color: var(--fau-text-muted); }
+.test-monitor-summary { flex: 1; }
+.test-monitor-filter { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.test-monitor-body { display: grid; grid-template-columns: minmax(200px, 32%) minmax(0, 1fr); min-height: 0; overflow: auto; }
+.test-monitor-list { overflow: auto; max-height: 480px; padding: 8px; border-right: 1px solid var(--fau-border); }
+.test-monitor-row {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  margin-bottom: 4px;
+  text-align: left;
+  border: 1px solid var(--fau-border);
+  border-radius: 10px;
+  background: var(--fau-surface);
+  color: var(--fau-text);
+  cursor: pointer;
+}
+.test-monitor-row.selected { border-color: var(--fau-text-muted); }
+.test-monitor-row-command { overflow-wrap: anywhere; font-size: 12px; font-weight: 600; }
+.test-monitor-row-state, .test-monitor-cwd, .test-monitor-memory, .test-monitor-pid {
+  font-size: 12px;
+  color: var(--fau-text-muted);
+  overflow-wrap: anywhere;
+}
+.test-monitor-detail { padding: 16px; min-width: 0; }
+.test-monitor-command { display: block; overflow-wrap: anywhere; white-space: pre-wrap; font-size: 13px; margin-bottom: 8px; }
+.test-monitor-cwd { margin-bottom: 12px; }
+.test-monitor-state { font-size: 12px; margin-bottom: 8px; }
+.test-monitor-process { padding: 12px 0; }
+.test-monitor-pid { flex: 1; }
+.test-monitor-stop {
+  padding: 6px 16px;
+  border: 1px solid var(--fau-border);
+  border-radius: 10px;
+  background: var(--fau-surface);
+  color: var(--fau-text);
+  cursor: pointer;
+}
+.test-monitor-stop:disabled { opacity: .6; cursor: default; }
+.test-monitor-detail pre {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--fau-border);
+  border-radius: 10px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.test-monitor-panel footer { padding: 12px 16px; border-top: 1px solid var(--fau-border); }
+.test-monitor-error { margin: 0; padding: 8px 16px; font-size: 12px; color: var(--fau-text); }
+.test-monitor-empty { padding: 12px; font-size: 12px; color: var(--fau-text-muted); }
+.test-monitor-panel [hidden] { display: none; }
+.test-monitor-panel button:focus-visible, .test-monitor-panel pre:focus-visible { outline: 2px solid var(--fau-text); outline-offset: 2px; }
+@media (max-width: 640px) {
+  .test-monitor-panel { right: 8px; width: calc(100vw - 16px); }
+  .test-monitor-body { grid-template-columns: 1fr; }
+  .test-monitor-list { max-height: 160px; border-right: none; border-bottom: 1px solid var(--fau-border); }
+  .test-monitor-detail pre { max-height: 200px; }
+}

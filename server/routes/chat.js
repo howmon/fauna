@@ -64,7 +64,7 @@ import { extractCorrections } from '../lib/failure-learning.js';
 import { buildAgentPolicy, discoverCustomizations, filterToolsByPolicy, resolveToolPolicy } from '../../lib/customization-registry.js';
 import { getProjectSystemContext, buildContextPayload, getProject, appendAutonomousRunLog, resolveProjectSourceRoot, setWorkItemBrowserVerification, setWorkItemVerification } from '../../project-manager.js';
 import { estimateTokens, computeBudget } from '../lib/token-budget.js';
-import { summarizeHistory } from '../lib/summarize-history.js';
+import { summarizeHistory, formatActivityEvidence } from '../lib/summarize-history.js';
 import { withTimeout } from '../lib/async-utils.js';
 import { loadAgentManifest } from '../lib/agent-manifest.js';
 import { buildCatalog, routeSkill } from '../../lib/skill-catalog.js';
@@ -75,6 +75,7 @@ import { buildDesignTaskContext } from '../../design-prompts.js';
 import { formatImageAssetContext, persistConversationImageAssets } from '../lib/attachment-assets.js';
 import { projectCapabilities } from '../lib/capability-projection.js';
 import { detectAutoVerifyCommand, resolveVerificationRoot, validationCommandKeys } from '../../lib/verification-command.js';
+import { buildTaskRequirements, TASK_FIDELITY_RULES } from '../lib/task-requirements.js';
 import { isUiChange, passedBrowserVerification } from '../../lib/browser-verification.js';
 
 // ── Tool-driven Decision Prompt bridge ────────────────────────────────────
@@ -609,6 +610,7 @@ export function registerChatRoute(app, {
   npmEnv = {},
   shellProcs = null,
   runStore = null,
+  conversationStore = null,
 }) {
   // ── File-edit undo ledger ─────────────────────────────────────────────
   // Stores old file contents from the most recent AI turn per conversation
@@ -1008,6 +1010,10 @@ export function registerChatRoute(app, {
     };
     let subagentStarted = false;
     let subagentStopPayload = null;
+    let tracer = null;
+    let _traceLedgerFile = null;
+    let toolCallCount = 0;
+    let autonomousStartedAt = Date.now();
 
     // SSE keep-alive: when a long tool call (or upstream silence) leaves the
     // socket without data for several seconds, Electron Chromium kills the
@@ -1115,6 +1121,30 @@ export function registerChatRoute(app, {
       }
 
       // Build system prompt — append project context, facts memory, context summary and browser context.
+      let effectiveContextSummary = contextSummary;
+      let storedConversation = null;
+      if (!isolateContext && !isDelegation && conversationStore && req.body?.conversationId) {
+        const stored = await conversationStore.get(req.body.conversationId);
+        storedConversation = stored;
+        if (stored?.contextSummary &&
+            (!effectiveContextSummary ||
+              (stored.contextSummaryUpdatedAt || 0) > (req.body.contextSummaryUpdatedAt || 0))) {
+          effectiveContextSummary = stored.contextSummary;
+        }
+      }
+      const persistSummary = async (summary, updatedAt) => {
+        if (conversationStore && req.body?.conversationId) {
+          const saved = await conversationStore.put(req.body.conversationId, {
+            contextSummary: summary, contextSummaryUpdatedAt: updatedAt,
+          });
+          return saved.contextSummaryUpdatedAt === updatedAt;
+        }
+        return true;
+      };
+      const taskRequirements = buildTaskRequirements(messages, storedConversation);
+      const taskRequirementsMessage = !isolateContext && !isDelegation ? taskRequirements.message : null;
+      const intentMessages = taskRequirementsMessage && taskRequirements.intent
+        ? [...messages, { role: 'user', content: taskRequirements.intent }] : messages;
       // Facts are scoped to the active project (with global facts always included);
       // this prevents project A's preferences from leaking into project B.
       // Sub-agent (delegation) calls still get the top-N GLOBAL facts so the
@@ -1271,7 +1301,7 @@ export function registerChatRoute(app, {
       // calling computeContextFlags multiple times.
       const _ctxFlags = (function () {
         try {
-          return computeContextFlags({ messages, systemPrompt, isDelegation, isCLI, noTools });
+          return computeContextFlags({ messages: intentMessages, systemPrompt, isDelegation, isCLI, noTools });
         } catch (_) {
           return { genui: true, browser: true, frontend: true };
         }
@@ -1302,6 +1332,7 @@ export function registerChatRoute(app, {
       //      change turn-to-turn, so they go last where a cache miss is cheap.
       const fullSystem = [
         systemPrompt,
+        TASK_FIDELITY_RULES,
         // ── 1. STABLE PREFIX ───────────────────────────────────────────────
         // Core guidelines: persistence, formatting, frontend quality, search defaults.
         // Baked into every conversation (skipped for delegation sub-agents to save tokens —
@@ -1361,7 +1392,7 @@ export function registerChatRoute(app, {
         imageAssetCtx,
         (isolateContext || isDelegation) ? '' : projectCtx,
         factsCtx,
-        (!isolateContext && contextSummary) ? `\n## Task Context (auto-summarized from earlier conversation)\n${contextSummary}` : '',
+        (!isolateContext && effectiveContextSummary) ? `\n## Task Context (auto-summarized from earlier conversation)\n${effectiveContextSummary}` : '',
         activePlanCtx,
         shellExecReminder,
         figmaFilesCtx,
@@ -1373,8 +1404,8 @@ export function registerChatRoute(app, {
       // Budget is computed per-model: window − systemTokens − known tool
       // schemas − reservedOutput, then scaled by the model's compactAt
       // threshold. Body messages must fit inside `bodyTokenLimit`.
-      const systemTokens   = estimateTokens(fullSystem);
-      const _budgetToolFlags = computeToolFlags({ messages, systemPrompt, isDelegation, isCLI, noTools });
+      const systemTokens   = estimateTokens(fullSystem) + (taskRequirementsMessage ? estimateTokens(taskRequirementsMessage) : 0);
+      const _budgetToolFlags = computeToolFlags({ messages: intentMessages, systemPrompt, isDelegation, isCLI, noTools });
       if (enableDynamicWidgets) _budgetToolFlags.widget = true;
       const _anticipatedSelfTools = (!isCLI && !noTools && !isProjectSearch)
         ? filterToolSchemas([
@@ -1393,6 +1424,9 @@ export function registerChatRoute(app, {
       // 1. Strip old image payloads and cap oversized messages (token-based)
       const stripped = messages.map((m, i) => {
         let content = m.content;
+        const evidence = formatActivityEvidence(m.activity);
+        if (evidence && typeof content === 'string') content += evidence;
+        else if (evidence && Array.isArray(content)) content = [...content, { type: 'text', text: evidence }];
 
         // Promote client-side image attachments (m.images) into image_url content parts.
         // The client sends images as { base64, mime, name }[] on the message object;
@@ -1420,12 +1454,14 @@ export function registerChatRoute(app, {
           const tokens = estimateTokens(content);
           if (tokens > MAX_MSG_TOKENS) {
             const charCap = MAX_MSG_TOKENS * 4; // headroom over CHARS_PER_TOKEN
-            content = content.slice(0, charCap) +
-              `\n…[truncated — ${tokens - MAX_MSG_TOKENS} tokens omitted]`;
+            const marker = `\n…[middle truncated — ${tokens - MAX_MSG_TOKENS} tokens omitted]\n`;
+            const head = Math.floor((charCap - marker.length) / 2);
+            content = content.slice(0, head) + marker + content.slice(-(charCap - marker.length - head));
           }
         }
 
-        return { ...m, content };
+        const { activity, ...message } = m;
+        return { ...message, content };
       });
 
       // 2. Always keep first msg + as many recent msgs as fit within token budget
@@ -1438,7 +1474,7 @@ export function registerChatRoute(app, {
       //   - default ON; opt out via FAUNA_AUTO_COMPACT=0 or autoCompact:false
       //   - never summarizes the last `KEEP_TAIL` messages (current turn)
       //   - never re-summarizes a slice that already contains a context_summary
-      //   - on summarizer failure, falls back silently to plain trimming
+      //   - on summarizer failure, stops rather than silently discarding history
       const autoCompactEnabled = (
         process.env.FAUNA_AUTO_COMPACT !== '0' &&
         req.body?.autoCompact !== false
@@ -1452,15 +1488,13 @@ export function registerChatRoute(app, {
         const middle = rest.slice(0, -KEEP_TAIL);
         // Allow re-compaction: if a prior summary exists, compact only the
         // non-summary portion so the summary + recent tail fit in the window.
-        const priorSummaryIdx = middle.findLastIndex(m => m && m.name === 'context_summary');
-        const compactSlice = priorSummaryIdx >= 0 ? middle.slice(priorSummaryIdx + 1) : middle;
+        const priorSummaries = middle.filter(m => m?.name === 'context_summary').map(m => m.content);
+        const compactSlice = middle.filter(m => m?.name !== 'context_summary');
         const alreadyHasSummary = compactSlice.length === 0; // nothing new to compact
+        const compactionUpdatedAt = Date.now();
         console.log(`[chat] auto-compact: bodyTokens=${totalBodyTokens} > limit=${budget.bodyTokenLimit}, summarizing ${compactSlice.length} msgs (skip=${alreadyHasSummary})`);
         if (!alreadyHasSummary) {
           // Bound the summarizer call so it can't stall the main turn.
-          const _compactTimeout = setTimeout(() => {
-            try { upstreamAbort.abort(); } catch (_) {}
-          }, 30_000);
           const _compactAbort = new AbortController();
           const _onMainAbort = () => { try { _compactAbort.abort(); } catch (_) {} };
           upstreamAbort.signal.addEventListener('abort', _onMainAbort, { once: true });
@@ -1479,14 +1513,15 @@ export function registerChatRoute(app, {
               throw new Error('__FAUNA_PRECOMPACT_BLOCKED__');
             }
             send({ type: 'context_compacting', count: compactSlice.length });
-            const summary = await Promise.race([
+            const summary = await withTimeout(
               summarizeHistory(compactSlice, {
                 client,
                 model: 'gpt-4o-mini',
                 signal: _compactAbort.signal,
+                previousSummary: [effectiveContextSummary, ...priorSummaries].filter(Boolean).join('\n\n'),
               }),
-              new Promise(resolve => setTimeout(() => resolve(''), 25_000)),
-            ]);
+              25_000, 'Context compaction',
+            );
             if (summary && summary.length > 50) {
               const synthetic = {
                 role: 'system',
@@ -1500,9 +1535,8 @@ export function registerChatRoute(app, {
                   'If items appear under "OPEN / UNVERIFIED", treat them as still pending. ' +
                   'Before reporting success, re-verify by reading current file state or running the relevant commands again.',
               };
-              // Replace the compactSlice range (after first msg, possibly after prior summary)
-              const spliceStart = 1 + (priorSummaryIdx >= 0 ? priorSummaryIdx + 1 : 0);
-              stripped.splice(spliceStart, compactSlice.length, synthetic);
+              // Replace prior summaries and newly summarized messages together.
+              stripped.splice(1, middle.length, synthetic);
               rest.length = 0;
               for (let i = 1; i < stripped.length; i++) rest.push(stripped[i]);
               compactedInfo = {
@@ -1510,17 +1544,21 @@ export function registerChatRoute(app, {
                 after: 1,
                 summaryTokens: estimateTokens(synthetic),
                 summary,
+                updatedAt: compactionUpdatedAt,
               };
+              await persistSummary(summary, compactedInfo.updatedAt);
+              effectiveContextSummary = summary;
               console.log(`[chat] auto-compacted ${compactSlice.length} msgs → 1 summary (${compactedInfo.summaryTokens}t)`);
             } else {
-              console.log('[chat] auto-compact produced empty summary; falling back to plain trim');
+              throw new Error('Context compaction produced no summary; earlier history was preserved. Retry or reduce the request size.');
             }
           } catch (e) {
             if (e?.message !== '__FAUNA_PRECOMPACT_BLOCKED__') {
-              console.warn('[chat] auto-compaction failed, continuing with plain trim:', e?.message || e);
+              console.warn('[chat] auto-compaction failed; history preserved:', e?.message || e);
             }
+            throw e;
           } finally {
-            clearTimeout(_compactTimeout);
+            _compactAbort.abort();
             upstreamAbort.signal.removeEventListener('abort', _onMainAbort);
           }
         }
@@ -1537,6 +1575,7 @@ export function registerChatRoute(app, {
       }
       const trimmed = first ? [first, ...recent] : recent;
       for (const message of compactHookSystemMessages) allMessages.push({ role: 'system', content: message });
+      if (taskRequirementsMessage) allMessages.push(taskRequirementsMessage);
       allMessages.push(...trimmed);
 
       // Set true when the latest user message reads as a circuit/schematic
@@ -1679,6 +1718,7 @@ export function registerChatRoute(app, {
           after: compactedInfo.after,
           summaryTokens: compactedInfo.summaryTokens,
           summary: compactedInfo.summary,
+          updatedAt: compactedInfo.updatedAt,
           bodyTokens,
           limit: budget.bodyTokenLimit,
         });
@@ -2010,6 +2050,8 @@ export function registerChatRoute(app, {
                 ? Math.min(maxOutputBytes, 500_000)
                 : undefined,
               signal: upstreamAbort.signal,
+              context: { conversationId: _reqConvId, projectId, runId: durableRunId,
+                source: reason === 'task completion verification' ? 'verification' : 'chat' },
               onChunk: (kind, text) => {
                 // Forward live stdout/stderr to the client via the existing
                 // tool_output SSE channel — it renders into a ```shell-output
@@ -2178,7 +2220,7 @@ export function registerChatRoute(app, {
         try {
           const _beforeCount = mcpTools.length;
           const _beforeBytes = JSON.stringify(mcpTools).length;
-          const _toolFlags = computeToolFlags({ messages, systemPrompt, isDelegation, isCLI, noTools });
+          const _toolFlags = computeToolFlags({ messages: intentMessages, systemPrompt, isDelegation, isCLI, noTools });
           // When the user explicitly enabled Dynamic Widgets in Settings,
           // keep the widget cluster (fauna_emit_widget + companions) live
           // for the whole conversation regardless of per-turn keyword
@@ -2233,17 +2275,16 @@ export function registerChatRoute(app, {
       // cross-file refactor reads 30+ files) without catching the actual
       // failure mode (model that varies args slightly while looping).
       let continueLoop = true;
-      let toolCallCount = 0; // kept for telemetry / debug logs only
       let continueCount = 0; // track auto-continue on length finish
 
       // ── ChatTracer — structured trace event ledger (Gap 4) ─────────────
       // Writes typed events to autonomous-runs/<id>.jsonl so runs are
       // replayable and observable without reading raw console logs.
       const _traceRunId = Math.random().toString(36).slice(2, 8) + Math.random().toString(36).slice(2, 8);
-      const _traceLedgerFile = projectId
+      _traceLedgerFile = projectId
         ? path.join(os.homedir(), '.config', 'fauna', 'autonomous-runs', `${projectId}-${_traceRunId}.jsonl`)
         : null;
-      const tracer = new ChatTracer(_traceLedgerFile || '/dev/null');
+      tracer = new ChatTracer(_traceLedgerFile || '/dev/null');
       if (_traceLedgerFile) {
         tracer.start(_traceRunId, {
           model, projectId: projectId || null, agentName: agentName || null,
@@ -2407,7 +2448,7 @@ export function registerChatRoute(app, {
       let deployResultSummary = null;
       let stopHooksRan = false;
       let stopHookResultSummary = null;
-      const autonomousStartedAt = Date.now();
+      autonomousStartedAt = Date.now();
       // Autonomous mode raises the safety caps so the loop runs until the
       // task is genuinely done. The narration-repeat + per-tool timeouts
       // remain in place — autonomous does NOT mean unbounded.
@@ -2440,14 +2481,16 @@ export function registerChatRoute(app, {
           if (typeof m.content === 'string') return m.content;
           if (Array.isArray(m.content)) return m.content.filter((p) => p && typeof p.text === 'string').map((p) => p.text).join(' ');
         }
-        return '';
+        return !isolateContext && !isDelegation ? taskRequirements.intent : '';
       })();
       const _hasSharedBrowserTabContext = /\[(?:Resolved live browser tab context|Same browser tab\(s\) as the previous turn|Browser-extension tab attached)/i.test(_lastUserQuery);
       // Write-intent detection. Includes rewrite/rebuild/regenerate/generate/scaffold/produce/draft
       // so the inspection-only and declared-work-without-mutation guards catch build-artifact
       // requests like "rewrite as a 30-page docx" that used to slip past the original verb list
       // (transcript: fauna-30-Page-Strategy-Report-Rewrite).
-      const _writeIntentTurn = /\b(?:fix|fixes|fixed|implement|resolve|repair|patch|update|change|modify|edit|write|create|add|remove|delete|hide|replace|refactor|migrate|install|extract|port|integrate|copy|move|bring|build\s+out|make\s+(?:all|the|this)|proceed|rewrite|rebuild|regenerate|generate|scaffold|produce|draft|assemble|compose|render(?:\s+out)?)\b/i.test(_lastUserQuery || '');
+      const _writeIntentTurn = /\b(?:fix|fixes|fixed|implement|resolve|repair|patch|update|change|modify|edit|write|create|add|remove|delete|hide|replace|refactor|migrate|install|extract|port|integrate|copy|move|bring|build\s+out|make\s+(?:all|the|this)|proceed|rewrite|rebuild|regenerate|generate|scaffold|produce|draft|assemble|compose|render(?:\s+out)?)\b/i.test(
+        (!isolateContext && !isDelegation ? taskRequirements.intent : _lastUserQuery) || '',
+      );
       let browserVerificationRequired = req.body?.requireBrowserVerification === true
         || ((_writeIntentTurn || autonomousMode) && isUiChange(_lastUserQuery));
       let browserVerification = null;
@@ -2518,7 +2561,11 @@ export function registerChatRoute(app, {
         qaResultSummary = null;
       };
       const _isReadOnlyShellCommand = (command) => {
-        const text = String(command || '').trim();
+        // Discarding output or forwarding file descriptors does not edit project files.
+        const text = String(command || '').trim().replace(
+          /(?:\d*|&)>>?\s*(?:\/dev\/null|"\/dev\/null"|'\/dev\/null')(?=\s|[;&|)]|$)|\d*>\s*&\d+\b/g,
+          '',
+        );
         if (!text) return true;
         if (/\b(?:npm|pnpm|yarn|bun)\s+(?:install|add|remove|update|upgrade|ci)\b/i.test(text)) return false;
         if (/\b(?:python\d*|node)\s+-?\s*<</i.test(text)) return false;
@@ -4297,8 +4344,8 @@ export function registerChatRoute(app, {
 
             // VS Code-like proactive summary: after every successful turn, fire a
             // background summarization of the recent tail and push the result to the
-            // client. The client stores it as conv.contextSummary and sends it back
-            // next turn, so the next turn's system prompt always contains a fresh
+            // client. Persist it server-side even when the stream has closed,
+            // so the next turn's system prompt contains the latest available
             // compressed view of what happened — regardless of whether compaction
             // triggered. This mirrors VS Code Copilot's strategy of maintaining a
             // separate "conversation summary" that's re-injected independent of the
@@ -4309,28 +4356,27 @@ export function registerChatRoute(app, {
             // client has somewhere to store the summary — no point burning tokens on
             // anonymous/one-shot requests, including test harnesses), at least 6
             // messages exist (enough to summarize), and the turn completed normally.
+            const summarizableMessages = allMessages.filter(message => message.name !== 'task_requirements');
             if (!isDelegation && !isCLI && !upstreamAbort.signal.aborted &&
                 req.body?.conversationId &&
-                client && Array.isArray(allMessages) && allMessages.length >= 6) {
-              const _summarizeSnap = allMessages
+                client && summarizableMessages.length >= 6) {
+              const _summarizeSnap = summarizableMessages
                 .filter(m => m.role !== 'system')
                 .slice(-24); // cap at last 24 non-system msgs (cheap window)
+              const summaryUpdatedAt = Date.now();
               (async () => {
                 try {
-                  const summary = await Promise.race([
-                    summarizeHistory(_summarizeSnap, { client, model: 'gpt-4o-mini' }),
-                    new Promise(resolve => setTimeout(() => resolve(''), 20_000)),
-                  ]);
+                  const summary = await withTimeout(
+                    summarizeHistory(_summarizeSnap, {
+                      client, model: 'gpt-4o-mini', previousSummary: effectiveContextSummary,
+                    }), 20_000, 'Proactive context summary',
+                  );
                   if (summary && summary.length > 50) {
-                    // Guard against writing to an already-closed SSE response.
-                    // res.write() on a finished stream throws ERR_INVALID_STATE
-                    // from the stream adapter — outside try/catch, causing a
-                    // main-process crash. Skip the send; summary is still useful
-                    // server-side if we persist it (future: store in conv record).
-                    if (!res.writableEnded) {
-                      send({ type: 'context_summary_updated', summary });
-                    }
+                    const saved = await persistSummary(summary, summaryUpdatedAt);
+                    if (saved && !res.writableEnded) send({ type: 'context_summary_updated', summary, updatedAt: summaryUpdatedAt });
                     console.log(`[chat] proactive summary updated (${_summarizeSnap.length} msgs → ${summary.length} chars, sent=${!res.writableEnded})`);
+                  } else {
+                    console.warn('[chat] proactive summary was empty; previous summary preserved');
                   }
                 } catch (e) {
                   console.warn('[chat] proactive summary failed:', e?.message || e);
@@ -4348,13 +4394,13 @@ export function registerChatRoute(app, {
           verification: { ...(qaResultSummary || {}), ok: false, browser: browserVerification || { ok: false, error } },
         });
       }
-      if (_traceLedgerFile) tracer.done({ totalTurns: turnUsage.iterations, totalTools: toolCallCount, durationMs: Date.now() - autonomousStartedAt });
+      if (_traceLedgerFile) tracer.done({ aborted: upstreamAbort.signal.aborted, totalTurns: turnUsage.iterations, totalTools: toolCallCount, durationMs: Date.now() - autonomousStartedAt });
       if (durableRunId && runStore && !requiresUserActionThisTurn) {
         const verification = browserVerificationRequired
           ? { ...(qaResultSummary || {}), browser: browserVerification,
             ok: qaResultSummary?.ok !== false && passedBrowserVerification(browserVerification) }
           : qaResultSummary;
-        runStore.setStatus(durableRunId, verification?.ok === false ? 'failed' : 'completed',
+        runStore.setStatus(durableRunId, upstreamAbort.signal.aborted ? 'cancelled' : verification?.ok === false ? 'failed' : 'completed',
           { totalTurns: turnUsage.iterations, totalTools: toolCallCount, verification });
       }
     } catch (err) {
@@ -4363,7 +4409,7 @@ export function registerChatRoute(app, {
       // whose messages happen to mention "abort".
       if (upstreamAbort.signal.aborted) {
         console.log('[chat] upstream aborted by client');
-        if (_traceLedgerFile) tracer.done({ aborted: true, totalTools: toolCallCount, durationMs: Date.now() - autonomousStartedAt });
+        if (_traceLedgerFile && tracer) tracer.done({ aborted: true, totalTools: toolCallCount, durationMs: Date.now() - autonomousStartedAt });
         if (durableRunId && runStore) runStore.setStatus(durableRunId, 'cancelled', { totalTools: toolCallCount });
       } else {
         try { send({ type: 'error', error: err.message }); } catch (_) {}

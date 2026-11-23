@@ -58,6 +58,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap">
 <link rel="stylesheet" href="css/styles.css">
+<link rel="stylesheet" href="css/test-monitor.css">
 <!-- QR code generated server-side via /api/mobile/pair -->
 </head>
 <body>
@@ -309,6 +310,9 @@
       <select id="model-select" onchange="onModelChange(this.value)"></select>
       <button class="topbar-update-btn" id="topbar-update-btn" type="button" style="display:none" onclick="_installFaunaUpdate()" title="Install app update"><i class="ti ti-download"></i> <span>Update</span></button>
       <!-- Running dev-servers indicator (VS Code Ports panel equivalent) -->
+      <button id="topbar-tests-btn" class="topbar-btn" type="button" title="Running tests" aria-label="Running tests" aria-haspopup="dialog" aria-expanded="false" aria-controls="test-monitor-panel">
+        <i class="ti ti-test-pipe"></i><span>Tests</span><span id="topbar-tests-count"></span>
+      </button>
       <button id="topbar-servers-btn" class="topbar-btn" style="display:none" onclick="_openDevServersQuick(event)" title="Running dev servers" aria-haspopup="dialog" aria-controls="dev-servers-widget">
         <i class="ti ti-server"></i>
         <span id="topbar-servers-count" style="font-size:10px;font-weight:700;margin-left:2px"></span>
@@ -3041,6 +3045,7 @@ Examples:
 <script src="js/browser.js"></script>
 <script src="js/recordings.js"></script>
 <script src="js/shell.js"></script>
+<script src="js/test-monitor.js"></script>
 <script src="js/writefile.js"></script>
 <script src="js/playbook.js"></script>
 <script src="js/features.js"></script>

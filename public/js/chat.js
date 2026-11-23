@@ -1808,9 +1808,9 @@ async function streamResponse(conv) {
             type: 'image_url',
             image_url: { url: 'data:' + img.mime + ';base64,' + img.base64, detail: 'high' }
           }));
-          return { role: m.role, content: parts };
+          return { role: m.role, content: parts, activity: m.activity };
         }
-        return { role: m.role, content: m.content };
+        return { role: m.role, content: m.content, activity: m.activity };
       });
 
     // ── Figma-agent inline override ──────────────────────────────────────
@@ -1974,6 +1974,7 @@ async function streamResponse(conv) {
     var _agentNeedsBrowser = (typeof activeAgent !== 'undefined' && activeAgent && activeAgent.permissions && activeAgent.permissions.browser) === true;
     var _effectiveModel = state.model;
     var chatBody = { messages, model: _effectiveModel, systemPrompt, useFigmaMCP: !!state.figmaMCPEnabled || _hasFigmaAttachment || _agentNeedsFigma || _userHasFigmaUrl, usePlaywrightMCP: !!state.playwrightMCPEnabled || _hasBrowserAttachment || _agentNeedsBrowser || _userHasUrl, selectedFigmaFileKeys: _selectedFigmaKeys, contextSummary: conv.contextSummary || '', thinkingBudget: state.thinkingBudget, maxContextTurns: state.maxContextTurns, enableDynamicWidgets: !!state.enableDynamicWidgets, autoCompact: state.autoCompact !== false, conversationId: (conv && conv.id) || null, runId: conv._activeRunId };
+    chatBody.contextSummaryUpdatedAt = conv.contextSummaryUpdatedAt || 0;
     // Autonomous-mode (run-until-done) flag. Per-conversation override wins;
     // otherwise the server falls back to the active project's setting.
     // `false` is forwarded explicitly so a conversation can opt OUT of a
@@ -2337,10 +2338,12 @@ async function streamResponse(conv) {
                 ' (~' + evt.summaryTokens + 't summary, ' +
                 evt.bodyTokens + '/' + evt.limit + 't body)', 'ok');
             try {
-              var _ccConvId = (typeof state !== 'undefined' && state) ? state.currentId : null;
+              var _ccConvId = convId;
               var _ccConv = (typeof getConv === 'function' && _ccConvId) ? getConv(_ccConvId) : null;
-              if (_ccConv && evt.summary && typeof evt.summary === 'string') {
+              if (_ccConv && evt.summary && typeof evt.summary === 'string' &&
+                  (evt.updatedAt || Date.now()) >= (_ccConv.contextSummaryUpdatedAt || 0)) {
                 _ccConv.contextSummary = evt.summary;
+                _ccConv.contextSummaryUpdatedAt = evt.updatedAt || Date.now();
                 if (typeof saveConversations === 'function') saveConversations();
                 if (state && state.currentId === _ccConv.id &&
                     typeof renderContextArchiveDivider === 'function' &&
@@ -2366,10 +2369,12 @@ async function streamResponse(conv) {
             // indicator. Next turn, chat.js sends it back as contextSummary so the server
             // injects it into the system prompt unconditionally.
             try {
-              var _csConvId = (typeof state !== 'undefined' && state) ? state.currentId : null;
+              var _csConvId = convId;
               var _csConv = (typeof getConv === 'function' && _csConvId) ? getConv(_csConvId) : null;
-              if (_csConv && evt.summary && typeof evt.summary === 'string') {
+              if (_csConv && evt.summary && typeof evt.summary === 'string' &&
+                  (evt.updatedAt || Date.now()) >= (_csConv.contextSummaryUpdatedAt || 0)) {
                 _csConv.contextSummary = evt.summary;
+                _csConv.contextSummaryUpdatedAt = evt.updatedAt || Date.now();
                 if (typeof saveConversations === 'function') saveConversations();
                 dbg('proactive summary updated (' + evt.summary.length + ' chars)', 'ok');
               }
@@ -2396,7 +2401,7 @@ async function streamResponse(conv) {
                 outPre.scrollTop = outPre.scrollHeight;
               }
               if (_currentActivityEntry && _piece) {
-                _currentActivityEntry.output = (_currentActivityEntry.output + _piece).slice(0, 20000);
+                _currentActivityEntry.output = (_currentActivityEntry.output + _piece).slice(-20000);
                 if (_currentActivityEntry.step) updateActivityStepDetail(_currentActivityEntry.step, _activityEntryDetail(_currentActivityEntry));
               }
               if (isActive()) scrollBottom();
@@ -2884,16 +2889,18 @@ async function maybeCompressConversation(conv, opts) {
 
   dbg('↻ summarizing ' + toSummarize.length + ' old messages (~' + totalChars + ' chars)…', 'info');
   conv._summarizing = true;
+  var summaryUpdatedAt = Date.now();
 
   try {
     var r = await fetch('/api/summarize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: toSummarize, model: state.model })
+      body: JSON.stringify({ messages: toSummarize, model: state.model, previousSummary: conv.contextSummary || '' })
     });
     if (!r.ok) throw new Error('summarize failed: ' + r.status);
     var data = await r.json();
     if (!data.summary) return;
+    if ((conv.contextSummaryUpdatedAt || 0) > summaryUpdatedAt) return;
 
     // Archive old messages (strip image base64 to keep storage lean) instead of dropping
     var archiveBatch = toSummarize.map(function(m) {
@@ -2911,7 +2918,8 @@ async function maybeCompressConversation(conv, opts) {
 
     // Store summary and trim active history (only recent messages sent to AI)
     conv.contextSummary = data.summary;
-    conv.messages = conv.messages.slice(-SUMMARIZE_KEEP_RECENT);
+    conv.contextSummaryUpdatedAt = summaryUpdatedAt;
+    conv.messages = conv.messages.slice(toSummarize.length);
     saveConversations();
     dbg('context compressed — summary: ' + data.summary.length + ' chars, kept last ' + SUMMARIZE_KEEP_RECENT + ' messages, archived ' + archiveBatch.length + ' to history', 'ok');
 

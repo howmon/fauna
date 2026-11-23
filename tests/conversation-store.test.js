@@ -38,6 +38,21 @@ function sampleConv(id, overrides = {}) {
   };
 }
 
+describe.each(['single', 'split-only'])('summary persistence: %s', mode => {
+  it('preserves newer server summaries through stale saves and reloads', async () => {
+    const store = createConversationStore({ configDir: tmpDir, mode });
+    await store.put('a', sampleConv('a', { contextSummary: 'Old summary' }));
+    await store.put('a', { contextSummary: 'Verified tests; browser check pending.', contextSummaryUpdatedAt: 200 });
+    await store.put('a', sampleConv('a', { contextSummary: 'Stale summary', contextSummaryUpdatedAt: 100 }));
+    const reloaded = createConversationStore({ configDir: tmpDir, mode });
+    expect(await reloaded.get('a')).toMatchObject({
+      contextSummary: 'Verified tests; browser check pending.', contextSummaryUpdatedAt: 200,
+      messages: [{ role: 'user', content: 'hello a' }],
+    });
+    await reloaded.put('a', { contextSummary: 'Newer summary', contextSummaryUpdatedAt: 300 });
+    expect((await store.get('a')).contextSummary).toBe('Newer summary');
+  });
+});
 describe('conversation-store: legacy backend', () => {
   function makeStore() {
     return createConversationStore({ configDir: tmpDir, mode: 'single' });
