@@ -805,8 +805,6 @@ function openProjSidebarPanel() {
   _projSpRenderProjectSection(proj);
   // Load file tree
   _projSpLoadTree(proj);
-  // Auto-refresh the file tree every 30 s while the panel is open
-  _projSpStartAutoRefresh();
   // Persist preference
   try { localStorage.setItem('fauna-proj-sp-open', proj.id); } catch (_) {}
 }
@@ -832,8 +830,127 @@ function closeProjSidebarPanel() {
   try { localStorage.removeItem('fauna-proj-sp-open'); } catch (_) {}
 }
 
-function _projSpStartAutoRefresh() {}
-function _projSpStopAutoRefresh() {}
+var _projSpFileWatch = null;
+
+function _projSpStopAutoRefresh() {
+  if (!_projSpFileWatch) return;
+  _projSpFileWatch.source.close();
+  clearTimeout(_projSpFileWatch.timer);
+  if (_projSpFileWatch.request) _projSpFileWatch.request.abort();
+  _projSpFileWatch = null;
+}
+
+function _projSpStartAutoRefresh() {
+  _projSpStopAutoRefresh();
+  var st = _projSidebarTreeState;
+  if (!state.projSidebarPanelOpen || !st.srcId || !window.EventSource) return;
+  var url = '/api/projects/' + encodeURIComponent(state.activeProjectId) +
+    '/sources/' + encodeURIComponent(st.srcId) + '/events';
+  var watch = {
+    projectId: state.activeProjectId, srcId: st.srcId, source: null,
+    dirty: new Set(), reset: false, running: false, timer: null, warned: false,
+  };
+  watch.source = new EventSource(window.faunaStreamUrl ? window.faunaStreamUrl(url) : url);
+  _projSpFileWatch = watch;
+  watch.source.onmessage = function(event) {
+    if (_projSpFileWatch !== watch) return;
+    try {
+      var change = JSON.parse(event.data);
+      if (change.type === 'ping') return;
+      if (change.type === 'watch-error') {
+        _projSpWatchError(watch, change.error);
+        return;
+      }
+      if (change.type !== 'ready' && change.type !== 'change') return;
+      watch.warned = false;
+      if (change.type === 'ready' || change.reset) watch.reset = true;
+      (change.paths || []).forEach(function(path) {
+        if (watch.dirty.size >= 256) { watch.reset = true; watch.dirty.clear(); }
+        if (!watch.reset) watch.dirty.add(path);
+      });
+      _projSpQueueRefresh(watch);
+    } catch (error) {
+      _projSpWatchError(watch, error.message);
+    }
+  };
+  watch.source.onerror = function() {
+    if (_projSpFileWatch === watch) _projSpWatchError(watch, 'Connection interrupted; retrying automatically.');
+  };
+}
+
+function _projSpWatchError(watch, message) {
+  console.warn('[project-files]', message);
+  if (!watch.warned) _showToast('Live file updates unavailable: ' + message, true);
+  watch.warned = true;
+}
+
+function _projSpQueueRefresh(watch) {
+  if (watch.timer || watch.running) return;
+  watch.timer = setTimeout(function() {
+    watch.timer = null;
+    _projSpRefreshChanged(watch);
+  }, 100);
+}
+
+async function _projSpRefreshChanged(watch) {
+  var st = _projSidebarTreeState;
+  function current() {
+    return _projSpFileWatch === watch && state.projSidebarPanelOpen &&
+      state.activeProjectId === watch.projectId && st.srcId === watch.srcId;
+  }
+  if (!current()) return;
+  watch.running = true;
+  watch.request = new AbortController();
+  var timeout = setTimeout(function() { watch.request.abort(); }, 8000);
+  var dirty = Array.from(watch.dirty);
+  var reset = watch.reset;
+  watch.dirty.clear();
+  watch.reset = false;
+  var dirs = new Set();
+  var invalidated = [];
+  Object.keys(st.dirCache).forEach(function(dir) {
+    if (reset || dirty.some(function(changed) {
+      var slash = changed.lastIndexOf('/');
+      var parent = slash < 0 ? '' : changed.slice(0, slash);
+      return dir === parent || dir === changed || dir.indexOf(changed + '/') === 0;
+    })) {
+      invalidated.push(dir);
+      if (!dir || st.expanded[dir]) dirs.add(dir);
+    }
+  });
+  if (reset) {
+    dirs.add('');
+    Object.keys(st.expanded).forEach(function(dir) { if (st.expanded[dir]) dirs.add(dir); });
+  }
+  try {
+    var listings = await Promise.all(Array.from(dirs).map(async function(dir) {
+      var response = await fetch('/api/projects/' + encodeURIComponent(watch.projectId) +
+        '/sources/' + encodeURIComponent(watch.srcId) + '/files?path=' + encodeURIComponent(dir),
+        { signal: watch.request.signal });
+      var files = await response.json();
+      // An expanded directory can disappear between the watch event and this request.
+      if (!response.ok && dir && /^(Path not found|Source directory not available)$/.test(files.error)) return [dir, []];
+      if (!response.ok) throw new Error(files.error || 'Could not refresh project files');
+      return [dir, files];
+    }));
+    if (!current()) return;
+    invalidated.forEach(function(dir) { delete st.dirCache[dir]; });
+    listings.forEach(function(listing) { st.dirCache[listing[0]] = listing[1]; });
+    if (dirs.size) {
+      var el = _treeGetEl(st);
+      var scrollTop = el ? el.scrollTop : 0;
+      _treeRender(st);
+      if (el) el.scrollTop = scrollTop;
+    }
+  } catch (error) {
+    if (current()) _projSpWatchError(watch, error.message);
+  } finally {
+    clearTimeout(timeout);
+    watch.request = null;
+    watch.running = false;
+    if (current() && (watch.reset || watch.dirty.size)) _projSpQueueRefresh(watch);
+  }
+}
 
 function _projSpRenderConvs(proj) {
   var el = document.getElementById('proj-sp-conv-list');
@@ -866,6 +983,7 @@ function toggleProjSpConvs() {
 window.toggleProjSpConvs = toggleProjSpConvs;
 
 async function _projSpLoadTree(proj) {
+  _projSpStopAutoRefresh();
   var srcRowEl = document.getElementById('proj-sp-src-row');
   if (!proj) return;
   var rootPath = proj.rootPath && proj.rootPath.trim();
@@ -882,6 +1000,7 @@ async function _projSpLoadTree(proj) {
   sources.forEach(function(s) { opts.push({ id: s.id, label: s.name || s.path || s.id }); });
 
   if (!opts.length) {
+    var treeEl = _treeGetEl(_projSidebarTreeState);
     if (treeEl) treeEl.innerHTML = '<div class="proj-hub-empty" style="padding:12px 8px;font-size:11px;opacity:.6">No folder configured.<br>Add a source in the project hub.</div>';
     if (srcRowEl) srcRowEl.style.display = 'none';
     return;
@@ -2315,19 +2434,25 @@ function _joinPath(dir, name) {
 
 async function _treeInit(st, srcId) {
   if (!state.activeProjectId) return;
+  if (st === _projSidebarTreeState) _projSpStopAutoRefresh();
+  var projectId = state.activeProjectId;
   st.srcId = srcId;
-  st.dirCache = {};
+  var cache = {};
+  st.dirCache = cache;
   st.expanded = {};
   var el = _treeGetEl(st);
   if (el) el.innerHTML = '<div class="proj-loading"><i class="ti ti-loader-2 spin"></i> Loading…</div>';
   try {
     var r = await fetch('/api/projects/' + state.activeProjectId + '/sources/' + srcId + '/files?path=');
     var files = await r.json();
+    if (state.activeProjectId !== projectId || st.srcId !== srcId || st.dirCache !== cache) return;
+    if (st === _projSidebarTreeState && !state.projSidebarPanelOpen) return;
     if (!r.ok) { if (el) el.innerHTML = '<div class="proj-hub-error">' + _projEsc(files.error) + '</div>'; return; }
     st.dirCache[''] = files;
     _treeRender(st);
     _treeBindDnd(st);
     _treeBindContextMenu(st);
+    if (st === _projSidebarTreeState) _projSpStartAutoRefresh();
   } catch(e) { if (el) el.innerHTML = '<div class="proj-hub-error">' + _projEsc(e.message) + '</div>'; }
 }
 

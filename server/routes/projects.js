@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import { subscribeProjectFiles } from '../lib/project-file-watcher.js';
 
 // Per-path write queue — prevents concurrent writes corrupting the same file
 const _writeQueue = new Map();
@@ -132,6 +133,7 @@ export function registerProjectRoutes(app, deps) {
     searchSourceFiles,
     replaceSourceMatches,
     resolveSourceFilePath,
+    resolveProjectSourceRoot,
     createSourceEntry,
     writeSourceFileBytes,
     deleteSourceEntry,
@@ -263,6 +265,45 @@ export function registerProjectRoutes(app, deps) {
       res.json(source);
     } catch (e) {
       res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/projects/:id/sources/:srcId/events', (req, res) => {
+    let unsubscribe;
+    let heartbeat;
+    const cleanup = () => {
+      clearInterval(heartbeat);
+      unsubscribe?.();
+    };
+    const send = payload => {
+      if (!res.write(`data: ${JSON.stringify(payload)}\n\n`)) {
+        cleanup();
+        res.end();
+      }
+    };
+    try {
+      const { root } = resolveProjectSourceRoot(req.params.id, req.params.srcId);
+      unsubscribe = subscribeProjectFiles(root,
+        change => send({ type: 'change', ...change }),
+        error => {
+          console.warn('[projects-route] file watcher failed:', error.message);
+          send({ type: 'watch-error', error: error.message });
+          cleanup();
+          res.end();
+        });
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders?.();
+      res.on('close', cleanup);
+      heartbeat = setInterval(() => send({ type: 'ping' }), 20000);
+      heartbeat.unref?.();
+      send({ type: 'ready' });
+    } catch (error) {
+      cleanup();
+      console.warn('[projects-route] cannot watch source:', error.message);
+      if (res.headersSent) res.end();
+      else res.status(400).json({ error: error.message });
     }
   });
 
